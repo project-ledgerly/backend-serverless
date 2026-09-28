@@ -100,3 +100,20 @@ export function validatePlanStructure(sections: SectionInput[]): ValidationResul
   checkChildPercentagesSumToParent(sections, issues);
   return { valid: issues.length === 0, issues };
 }
+
+/**
+ * Rule 6: a percentage edit only needs to re-validate the edited section's
+ * own sibling group — its parent's children (rule 2), or the top-level
+ * group (rule 1) if it has no parent — not every other branch of the plan.
+ * `siblings` must all share the same parentId (the caller queries by it).
+ */
+export function validateSiblingGroup(siblings: SectionInput[]): ValidationResult {
+  const issues: ValidationIssue[] = [];
+  const parentId = siblings[0]?.parentId ?? null;
+  if (parentId === null) {
+    checkEssentialsSavingsGoalsPercentage(siblings, issues);
+  } else {
+    checkChildPercentagesSumToParent(siblings, issues);
+  }
+  return { valid: issues.length === 0, issues };
+}

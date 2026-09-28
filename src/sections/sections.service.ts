@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, type Section } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { validatePlanStructure } from '../engine/validationService.js';
+import { validateSiblingGroup } from '../engine/validationService.js';
 import type { SectionInput } from '../engine/types.js';
 import type { CreateSectionDto } from './dto/create-section.dto.js';
 import type { UpdateSectionDto } from './dto/update-section.dto.js';
@@ -32,8 +32,8 @@ export class SectionsService {
     }
   }
 
-  private assertStructureValid(hypothetical: SectionInput[]) {
-    const validation = validatePlanStructure(hypothetical);
+  private assertSiblingGroupValid(siblings: SectionInput[]) {
+    const validation = validateSiblingGroup(siblings);
     if (!validation.valid) {
       throw new BadRequestException({ issues: validation.issues });
     }
@@ -42,21 +42,19 @@ export class SectionsService {
   async create(planId: string, dto: CreateSectionDto) {
     await this.assertParentInPlan(planId, dto.parentId);
 
-    const existing = await this.prisma.section.findMany({ where: { planId } });
-    const hypothetical: SectionInput[] = [
-      ...existing.map(toSectionInput),
-      {
-        id: 'pending',
-        parentId: dto.parentId ?? null,
-        name: dto.name,
-        type: dto.type,
-        allocationMode: dto.allocationMode,
-        percentage: dto.percentage,
-        priorityOrder: dto.priorityOrder,
-        protected: dto.protected ?? false,
-      },
-    ];
-    this.assertStructureValid(hypothetical);
+    const parentId = dto.parentId ?? null;
+    const siblings = await this.prisma.section.findMany({ where: { planId, parentId } });
+    const pending: SectionInput = {
+      id: 'pending',
+      parentId,
+      name: dto.name,
+      type: dto.type,
+      allocationMode: dto.allocationMode,
+      percentage: dto.percentage,
+      priorityOrder: dto.priorityOrder,
+      protected: dto.protected ?? false,
+    };
+    this.assertSiblingGroupValid([...siblings.map(toSectionInput), pending]);
 
     try {
       return await this.prisma.section.create({ data: { ...dto, planId } });
@@ -84,15 +82,20 @@ export class SectionsService {
       await this.assertParentInPlan(section.planId, dto.parentId);
     }
 
-    const existing = await this.prisma.section.findMany({ where: { planId: section.planId } });
     // dto's declared-but-unset fields are own properties set to `undefined`
     // (TS class fields under ES2022), so a blind spread would clobber the
     // real existing values for every field the PATCH body didn't include —
     // only merge keys the caller actually sent.
     const definedUpdates = Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined));
     const merged: SectionInput = { ...toSectionInput(section), ...definedUpdates };
-    const hypothetical = existing.map((s) => (s.id === id ? merged : toSectionInput(s)));
-    this.assertStructureValid(hypothetical);
+
+    // Rule 6: only the edited section's (possibly new) sibling group needs
+    // re-validating, not the whole plan — moving away from the old group
+    // can only shrink its percentage sum, so it never needs rechecking.
+    const newSiblings = await this.prisma.section.findMany({
+      where: { planId: section.planId, parentId: merged.parentId, id: { not: id } },
+    });
+    this.assertSiblingGroupValid([...newSiblings.map(toSectionInput), merged]);
 
     try {
       return await this.prisma.section.update({ where: { id }, data: dto });
