@@ -96,6 +96,21 @@ describe("allocate", () => {
     expect(result.order).toEqual(["essential"]);
   });
 
+  it("still resolves remainder last even if its priorityOrder is lower than a percentage sibling's", () => {
+    const sections: SectionInput[] = [
+      // Remainder given priorityOrder 1 (would sort first by number alone) —
+      // engine must still fund it last, or the two allocations overlap.
+      section({ id: "flexible", type: "FLEXIBLE", allocationMode: "REMAINDER", priorityOrder: 1 }),
+      section({ id: "essential", type: "ESSENTIAL", allocationMode: "PERCENTAGE", percentage: 60, priorityOrder: 2 }),
+    ];
+
+    const result = allocate(sections, 1000);
+
+    expect(amountOf(result, "essential")).toBe(600);
+    expect(amountOf(result, "flexible")).toBe(400);
+    expect(result.order).toEqual(["essential", "flexible"]);
+  });
+
   it("keeps precision across many fractional-percentage sections (no float drift)", () => {
     const sections: SectionInput[] = [
       section({ id: "a", allocationMode: "PERCENTAGE", percentage: "33.33", priorityOrder: 1 }),

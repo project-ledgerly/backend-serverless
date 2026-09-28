@@ -29,7 +29,16 @@ export function allocate(sections: SectionInput[], income: Decimal.Value): Alloc
     byParent.set(section.parentId, siblings);
   }
   for (const siblings of byParent.values()) {
-    siblings.sort((a, b) => a.priorityOrder - b.priorityOrder);
+    // Remainder always resolves last within its group, regardless of its
+    // stored priorityOrder — trusting that value blindly let a remainder
+    // section end up funded against zero "funded so far" when reordered
+    // ahead of a percentage sibling, double-allocating income.
+    siblings.sort((a, b) => {
+      if (a.allocationMode !== b.allocationMode) {
+        return a.allocationMode === "REMAINDER" ? 1 : -1;
+      }
+      return a.priorityOrder - b.priorityOrder;
+    });
   }
 
   function fundLevel(parentId: string | null, parentAmount: Decimal) {
