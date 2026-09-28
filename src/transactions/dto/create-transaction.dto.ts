@@ -10,6 +10,8 @@ export class CreateTransactionDto {
   @IsUUID()
   sectionId!: string;
 
+  // Signed: positive credits the account (income, refund), negative debits
+  // it (a spend). Drives the account's balance directly on create.
   @IsNotEmpty()
   @IsNumberString()
   amount!: string;

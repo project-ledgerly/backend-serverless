@@ -39,8 +39,30 @@ export class SectionsService {
     }
   }
 
+  /**
+   * A SAVINGS-type Section may only link to a SAVINGS-type Account;
+   * everything else (Essential, Goal, Flexible) may only link to a
+   * SPENDING-type Account. Money for a savings goal shouldn't be able to
+   * point at the same pot as grocery spending.
+   */
+  private async assertAccountTypeMatches(sectionType: Section['type'], accountId: string) {
+    const account = await this.prisma.account.findUnique({ where: { id: accountId } });
+    if (!account) {
+      throw new BadRequestException(`accountId ${accountId} does not exist`);
+    }
+    const expected = sectionType === 'SAVINGS' ? 'SAVINGS' : 'SPENDING';
+    if (account.type !== expected) {
+      throw new BadRequestException(
+        `A ${sectionType} section can only link to a ${expected} account, but ${accountId} is ${account.type}`,
+      );
+    }
+  }
+
   async create(planId: string, dto: CreateSectionDto) {
     await this.assertParentInPlan(planId, dto.parentId);
+    if (dto.accountId) {
+      await this.assertAccountTypeMatches(dto.type, dto.accountId);
+    }
 
     const parentId = dto.parentId ?? null;
     const siblings = await this.prisma.section.findMany({ where: { planId, parentId } });
@@ -80,6 +102,11 @@ export class SectionsService {
     const section = await this.findOne(id);
     if (dto.parentId !== undefined) {
       await this.assertParentInPlan(section.planId, dto.parentId);
+    }
+
+    const resolvedAccountId = dto.accountId !== undefined ? dto.accountId : section.accountId;
+    if (resolvedAccountId) {
+      await this.assertAccountTypeMatches(dto.type ?? section.type, resolvedAccountId);
     }
 
     // dto's declared-but-unset fields are own properties set to `undefined`

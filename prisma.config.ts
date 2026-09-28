@@ -10,7 +10,13 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   engine: "classic",
+  // CLI operations (migrate, studio) need a direct session connection, not
+  // the pooled pgbouncer one — pgbouncer's transaction-mode pooling doesn't
+  // support the session-level advisory lock Prisma's migrate engine takes,
+  // so pointing this at DATABASE_URL (pooled) hangs forever with no error.
+  // The app's own runtime PrismaClient is unaffected by this file — it
+  // reads schema.prisma's url/directUrl from env directly.
   datasource: {
-    url: env("DATABASE_URL"),
+    url: env("DIRECT_URL"),
   },
 });

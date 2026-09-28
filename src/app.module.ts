@@ -6,9 +6,10 @@ import { PlansModule } from './plans/plans.module.js';
 import { SectionsModule } from './sections/sections.module.js';
 import { IncomeModule } from './income/income.module.js';
 import { TransactionsModule } from './transactions/transactions.module.js';
+import { AccountsModule } from './accounts/accounts.module.js';
 
 @Module({
-  imports: [PrismaModule, PlansModule, SectionsModule, IncomeModule, TransactionsModule],
+  imports: [PrismaModule, PlansModule, SectionsModule, IncomeModule, TransactionsModule, AccountsModule],
   controllers: [AppController],
   providers: [AppService],
 })

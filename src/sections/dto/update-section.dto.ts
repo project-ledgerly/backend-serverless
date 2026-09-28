@@ -31,4 +31,9 @@ export class UpdateSectionDto {
   @IsOptional()
   @IsBoolean()
   protected?: boolean;
+
+  // Null clears the link; undefined leaves it unchanged.
+  @IsOptional()
+  @IsUUID()
+  accountId?: string | null;
 }

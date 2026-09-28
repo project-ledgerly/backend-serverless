@@ -36,17 +36,26 @@ export class TransactionsService {
     await this.assertAccountOwnedByUser(dto.accountId, dto.userId);
     await this.loadSectionAndCheckProtection(dto.sectionId, dto.confirmed);
 
-    return this.prisma.transaction.create({
-      data: {
-        userId: dto.userId,
-        accountId: dto.accountId,
-        sectionId: dto.sectionId,
-        amount: dto.amount,
-        description: dto.description,
-        date: new Date(dto.date),
-        source: dto.source,
-      },
-    });
+    // amount is signed (see schema.prisma) — it's the source of truth the
+    // account's balance is derived from, not just a record alongside it.
+    const [transaction] = await this.prisma.$transaction([
+      this.prisma.transaction.create({
+        data: {
+          userId: dto.userId,
+          accountId: dto.accountId,
+          sectionId: dto.sectionId,
+          amount: dto.amount,
+          description: dto.description,
+          date: new Date(dto.date),
+          source: dto.source,
+        },
+      }),
+      this.prisma.account.update({
+        where: { id: dto.accountId },
+        data: { balance: { increment: dto.amount } },
+      }),
+    ]);
+    return transaction;
   }
 
   findAllForAccount(accountId: string) {
@@ -81,11 +90,34 @@ export class TransactionsService {
       definedUpdates.date = new Date(definedUpdates.date as string);
     }
 
-    return this.prisma.transaction.update({ where: { id }, data: definedUpdates });
+    // Reverse the old amount off the old account, then apply the new amount
+    // to the (possibly different) new account — two ops even when the
+    // account didn't change, simpler and just as correct as netting a delta.
+    const newAccountId = dto.accountId ?? transaction.accountId;
+    const newAmount = dto.amount ?? transaction.amount.toString();
+
+    const [, , updated] = await this.prisma.$transaction([
+      this.prisma.account.update({
+        where: { id: transaction.accountId },
+        data: { balance: { decrement: transaction.amount } },
+      }),
+      this.prisma.account.update({
+        where: { id: newAccountId },
+        data: { balance: { increment: newAmount } },
+      }),
+      this.prisma.transaction.update({ where: { id }, data: definedUpdates }),
+    ]);
+    return updated;
   }
 
   async remove(id: string) {
-    await this.findOne(id);
-    await this.prisma.transaction.delete({ where: { id } });
+    const transaction = await this.findOne(id);
+    await this.prisma.$transaction([
+      this.prisma.account.update({
+        where: { id: transaction.accountId },
+        data: { balance: { decrement: transaction.amount } },
+      }),
+      this.prisma.transaction.delete({ where: { id } }),
+    ]);
   }
 }

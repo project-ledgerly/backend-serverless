@@ -59,6 +59,14 @@ model Section {
   priorityOrder  Int
   protected      Boolean        @default(false)
 
+  // Where this Section's money actually sits, distinct from allocation
+  // percentage. Nullable — linking a Section to an Account is optional.
+  // Type-matching (SAVINGS Section -> SAVINGS Account, everything else ->
+  // SPENDING Account) is enforced in SectionsService, not the DB, since it
+  // depends on two rows' types together.
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id])
+
   goal        Goal?
   transactions Transaction[]
   rules       Rule[]
@@ -107,15 +115,21 @@ model SectionAllocation {
   createdAt DateTime @default(now())
 }
 
+enum AccountType {
+  SAVINGS
+  SPENDING
+}
+
 model Account {
-  id      String  @id @default(uuid())
+  id      String      @id @default(uuid())
   userId  String
-  user    User    @relation(fields: [userId], references: [id])
+  user    User        @relation(fields: [userId], references: [id])
   name    String
-  type    String
+  type    AccountType
   balance Decimal
 
   transactions Transaction[]
+  sections     Section[]
 }
 
 model Transaction {
@@ -126,6 +140,10 @@ model Transaction {
   account     Account  @relation(fields: [accountId], references: [id])
   sectionId   String
   section     Section  @relation(fields: [sectionId], references: [id])
+  // Signed: positive credits the Account (income, refund), negative debits
+  // it (a spend). TransactionsService applies this delta to Account.balance
+  // on create/update/delete — it isn't just a record, it's the source of
+  // truth the balance is derived from.
   amount      Decimal
   description String
   date        DateTime

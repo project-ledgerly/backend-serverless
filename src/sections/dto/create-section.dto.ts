@@ -25,4 +25,11 @@ export class CreateSectionDto {
   @IsOptional()
   @IsBoolean()
   protected?: boolean;
+
+  // Where this Section's money sits. Optional — type-matched against the
+  // Section's own type in SectionsService (SAVINGS Section -> SAVINGS
+  // Account only, everything else -> SPENDING Account only).
+  @IsOptional()
+  @IsUUID()
+  accountId?: string;
 }
