@@ -1,0 +1,152 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id       String @id @default(uuid())
+  name     String
+  currency String
+  settings Json   @default("{}")
+
+  plans             Plan[]
+  incomes           Income[]
+  accounts          Account[]
+  transactions      Transaction[]
+  rules             Rule[]
+  netWorthSnapshots NetWorthSnapshot[]
+}
+
+model Plan {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  status    String
+  createdAt DateTime @default(now())
+
+  sections Section[]
+}
+
+enum SectionType {
+  ESSENTIAL
+  SAVINGS
+  GOAL
+  FLEXIBLE
+}
+
+enum AllocationMode {
+  PERCENTAGE
+  REMAINDER
+}
+
+model Section {
+  id             String         @id @default(uuid())
+  planId         String
+  plan           Plan           @relation(fields: [planId], references: [id])
+  parentId       String?
+  parent         Section?       @relation("SectionChildren", fields: [parentId], references: [id])
+  children       Section[]      @relation("SectionChildren")
+  name           String
+  type           SectionType
+  allocationMode AllocationMode
+  percentage     Decimal
+  priorityOrder  Int
+  protected      Boolean        @default(false)
+
+  goal        Goal?
+  transactions Transaction[]
+  rules       Rule[]
+  allocations SectionAllocation[]
+
+  // Rule 3 (exactly one REMAINDER section per sibling group) is enforced by a
+  // partial unique index added by hand in the init migration — Prisma's
+  // schema language can't express a filtered/expression index.
+}
+
+model Goal {
+  id                  String   @id @default(uuid())
+  sectionId           String   @unique
+  section             Section  @relation(fields: [sectionId], references: [id])
+  targetAmount        Decimal
+  currentAmount       Decimal
+  targetDate          DateTime
+  monthlyContribution Decimal
+  autoCalculated      Boolean  @default(true)
+}
+
+model Income {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  amount    Decimal
+  source    String
+  date      DateTime
+  recurring Boolean  @default(false)
+
+  allocations SectionAllocation[]
+}
+
+/// One row per section per allocation run, tied to the income event that
+/// triggered it. Additive — not in the original ERD, which has no field for
+/// a computed amount, but the payday-allocation sequence diagram calls for
+/// persisting the result, so this closes that gap the same way
+/// NetWorthSnapshot sits alongside the core model.
+model SectionAllocation {
+  id        String   @id @default(uuid())
+  sectionId String
+  section   Section  @relation(fields: [sectionId], references: [id])
+  incomeId  String
+  income    Income   @relation(fields: [incomeId], references: [id])
+  amount    Decimal
+  createdAt DateTime @default(now())
+}
+
+model Account {
+  id      String  @id @default(uuid())
+  userId  String
+  user    User    @relation(fields: [userId], references: [id])
+  name    String
+  type    String
+  balance Decimal
+
+  transactions Transaction[]
+}
+
+model Transaction {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  accountId   String
+  account     Account  @relation(fields: [accountId], references: [id])
+  sectionId   String
+  section     Section  @relation(fields: [sectionId], references: [id])
+  amount      Decimal
+  description String
+  date        DateTime
+  source      String
+}
+
+model Rule {
+  id        String  @id @default(uuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+  pattern   String
+  sectionId String
+  section   Section @relation(fields: [sectionId], references: [id])
+}
+
+model NetWorthSnapshot {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
+  date             DateTime
+  totalAssets      Decimal
+  totalLiabilities Decimal
+  netWorth         Decimal
+}
