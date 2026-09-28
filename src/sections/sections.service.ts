@@ -1,9 +1,24 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Section } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { validatePlanStructure } from '../engine/validationService.js';
+import type { SectionInput } from '../engine/types.js';
 import type { CreateSectionDto } from './dto/create-section.dto.js';
 import type { UpdateSectionDto } from './dto/update-section.dto.js';
 import type { ReorderSectionsDto } from './dto/reorder-sections.dto.js';
+
+function toSectionInput(s: Section): SectionInput {
+  return {
+    id: s.id,
+    parentId: s.parentId,
+    name: s.name,
+    type: s.type as SectionInput['type'],
+    allocationMode: s.allocationMode as SectionInput['allocationMode'],
+    percentage: s.percentage.toString(),
+    priorityOrder: s.priorityOrder,
+    protected: s.protected,
+  };
+}
 
 @Injectable()
 export class SectionsService {
@@ -17,12 +32,34 @@ export class SectionsService {
     }
   }
 
+  private assertStructureValid(hypothetical: SectionInput[]) {
+    const validation = validatePlanStructure(hypothetical);
+    if (!validation.valid) {
+      throw new BadRequestException({ issues: validation.issues });
+    }
+  }
+
   async create(planId: string, dto: CreateSectionDto) {
     await this.assertParentInPlan(planId, dto.parentId);
+
+    const existing = await this.prisma.section.findMany({ where: { planId } });
+    const hypothetical: SectionInput[] = [
+      ...existing.map(toSectionInput),
+      {
+        id: 'pending',
+        parentId: dto.parentId ?? null,
+        name: dto.name,
+        type: dto.type,
+        allocationMode: dto.allocationMode,
+        percentage: dto.percentage,
+        priorityOrder: dto.priorityOrder,
+        protected: dto.protected ?? false,
+      },
+    ];
+    this.assertStructureValid(hypothetical);
+
     try {
-      return await this.prisma.section.create({
-        data: { ...dto, planId },
-      });
+      return await this.prisma.section.create({ data: { ...dto, planId } });
     } catch (error) {
       throw this.translateWriteError(error);
     }
@@ -46,6 +83,17 @@ export class SectionsService {
     if (dto.parentId !== undefined) {
       await this.assertParentInPlan(section.planId, dto.parentId);
     }
+
+    const existing = await this.prisma.section.findMany({ where: { planId: section.planId } });
+    // dto's declared-but-unset fields are own properties set to `undefined`
+    // (TS class fields under ES2022), so a blind spread would clobber the
+    // real existing values for every field the PATCH body didn't include —
+    // only merge keys the caller actually sent.
+    const definedUpdates = Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined));
+    const merged: SectionInput = { ...toSectionInput(section), ...definedUpdates };
+    const hypothetical = existing.map((s) => (s.id === id ? merged : toSectionInput(s)));
+    this.assertStructureValid(hypothetical);
+
     try {
       return await this.prisma.section.update({ where: { id }, data: dto });
     } catch (error) {
