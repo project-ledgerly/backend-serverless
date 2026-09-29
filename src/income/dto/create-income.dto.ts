@@ -18,4 +18,8 @@ export class CreateIncomeDto {
   @IsOptional()
   @IsBoolean()
   recurring?: boolean;
+
+  // The Account this income credits — immediately if one-off, each cycle if recurring.
+  @IsUUID()
+  accountId!: string;
 }

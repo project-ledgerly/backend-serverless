@@ -15,10 +15,15 @@ export class TransactionsController {
   }
 
   @Get()
-  findAll(@Query('accountId') accountId?: string, @Query('sectionId') sectionId?: string) {
+  findAll(
+    @Query('accountId') accountId?: string,
+    @Query('sectionId') sectionId?: string,
+    @Query('userId') userId?: string,
+  ) {
     if (accountId) return this.transactionsService.findAllForAccount(accountId);
     if (sectionId) return this.transactionsService.findAllForSection(sectionId);
-    throw new BadRequestException('accountId or sectionId query param is required');
+    if (userId) return this.transactionsService.findAllForUser(userId);
+    throw new BadRequestException('accountId, sectionId, or userId query param is required');
   }
 
   @Get(':transactionId')

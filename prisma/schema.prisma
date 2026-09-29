@@ -14,6 +14,12 @@ model User {
   currency String
   settings Json   @default("{}")
 
+  // Nullable — a User created via the old passwordless POST /users flow
+  // (mobile/'s Ledgerly app) has neither. A User created via
+  // POST /auth/register (mobile-v2) always has both.
+  email        String? @unique
+  passwordHash String?
+
   plans             Plan[]
   incomes           Income[]
   accounts          Account[]
@@ -77,17 +83,59 @@ model Section {
   // schema language can't express a filtered/expression index.
 }
 
-model Goal {
-  id                  String   @id @default(uuid())
-  sectionId           String   @unique
-  section             Section  @relation(fields: [sectionId], references: [id])
-  targetAmount        Decimal
-  currentAmount       Decimal
-  targetDate          DateTime
-  monthlyContribution Decimal
-  autoCalculated      Boolean  @default(true)
+enum GoalMode {
+  // Lifetime target — accumulates forever until currentAmount hits
+  // targetAmount (buy a laptop, build $1000 life savings).
+  TARGET
+  // A recurring monthly commitment, not a lifetime pot (save 20,000/month).
+  // currentAmount tracks only the active calendar month; GoalSchedulerService
+  // rolls it into a GoalMonthSnapshot at month boundary and resets to 0.
+  MONTHLY_RECURRING
 }
 
+model Goal {
+  id            String   @id @default(uuid())
+  sectionId     String   @unique
+  section       Section  @relation(fields: [sectionId], references: [id])
+  mode          GoalMode @default(TARGET)
+  targetAmount  Decimal
+  // Derived, not hand-set — TransactionsService adjusts this the same way it
+  // adjusts Account.balance, on every Transaction tagged to this Goal's
+  // section. A contribution (allocation credit) raises it, a withdrawal
+  // (a logged or scanned spend) lowers it — same signed-amount convention.
+  currentAmount Decimal
+  // TARGET only — MONTHLY_RECURRING has no end date, it just repeats.
+  targetDate    DateTime?
+  // TARGET only — suggested (target - current) / monthsRemaining from
+  // sinkingFundCalculator; MONTHLY_RECURRING has no separate figure, its
+  // targetAmount already IS the monthly commitment.
+  monthlyContribution Decimal?
+  autoCalculated      Boolean  @default(true)
+  // MONTHLY_RECURRING only — start of the calendar month currentAmount is
+  // currently tracking. Null for TARGET goals.
+  currentPeriodStart DateTime?
+
+  monthSnapshots GoalMonthSnapshot[]
+}
+
+// One row per calendar month a MONTHLY_RECURRING goal has rolled past —
+// what lets the app tell the user "you fell short by X" / "you had a
+// surplus of X" without forcing the shortfall onto the next month. Whether
+// to add that surplus/shortfall in going forward is the user's own call.
+model GoalMonthSnapshot {
+  id           String   @id @default(uuid())
+  goalId       String
+  goal         Goal     @relation(fields: [goalId], references: [id])
+  periodStart  DateTime
+  periodEnd    DateTime
+  targetAmount Decimal
+  actualAmount Decimal
+  createdAt    DateTime @default(now())
+}
+
+// A definition, not a running total: one-off income is a single event,
+// recurring income is the template a monthly cycle repeats. Either way the
+// actual money-received history lives in IncomeReceipt, one row per credit.
 model Income {
   id        String   @id @default(uuid())
   userId    String
@@ -97,7 +145,31 @@ model Income {
   date      DateTime
   recurring Boolean  @default(false)
 
+  // Which Account gets credited. Recurring only: the next due date — catch-up
+  // is lazy, nothing runs on a schedule; a request
+  // (IncomeSchedulerService.catchUp) walks nextRunDate forward one month at
+  // a time for every cycle that's already due, crediting the Account and
+  // logging a receipt each time, until it's not in the past anymore.
+  accountId   String
+  account     Account   @relation(fields: [accountId], references: [id])
+  nextRunDate DateTime?
+
   allocations SectionAllocation[]
+  receipts    IncomeReceipt[]
+}
+
+// One row per actual credit — the one-off income itself, or one per
+// recurring cycle catch-up applies. This is what answers "how much have we
+// actually gotten, and when" — Income alone can't, it's just the definition.
+model IncomeReceipt {
+  id        String   @id @default(uuid())
+  incomeId  String
+  income    Income   @relation(fields: [incomeId], references: [id])
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id])
+  amount    Decimal
+  date      DateTime
+  createdAt DateTime @default(now())
 }
 
 /// One row per section per allocation run, tied to the income event that
@@ -130,6 +202,8 @@ model Account {
 
   transactions Transaction[]
   sections     Section[]
+  incomes      Income[]
+  incomeReceipts IncomeReceipt[]
 }
 
 model Transaction {

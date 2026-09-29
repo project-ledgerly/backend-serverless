@@ -29,4 +29,35 @@ export class PlanRepository {
       })),
     });
   }
+
+  /** sectionId -> accountId, for the sections in this plan that link to one. */
+  async loadSectionAccountMap(planId: string): Promise<Map<string, string>> {
+    const sections = await this.prisma.section.findMany({
+      where: { planId, accountId: { not: null } },
+      select: { id: true, accountId: true },
+    });
+    return new Map(sections.map((s) => [s.id, s.accountId as string]));
+  }
+
+  async getIncomeUserAndAccount(incomeId: string): Promise<{ userId: string; accountId: string }> {
+    const income = await this.prisma.income.findUniqueOrThrow({ where: { id: incomeId } });
+    return { userId: income.userId, accountId: income.accountId };
+  }
+
+  /**
+   * The "transfer out" half of a payday allocation transfer — moves cash off
+   * the income account only. Deliberately bypasses TransactionsService: it
+   * has to be tagged with the *destination* section (Transaction.sectionId
+   * is required, and there's no better answer), but that section's Goal
+   * must NOT see this leg — it never lost anything, its account is the one
+   * about to gain the matching credit. Only touches Account.balance.
+   */
+  async recordTransferOutLeg(userId: string, accountId: string, sectionId: string, amount: string, description: string) {
+    await this.prisma.$transaction([
+      this.prisma.transaction.create({
+        data: { userId, accountId, sectionId, amount, description, date: new Date(), source: 'allocation' },
+      }),
+      this.prisma.account.update({ where: { id: accountId }, data: { balance: { increment: amount } } }),
+    ]);
+  }
 }
