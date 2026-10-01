@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { CreateUserDto } from './dto/create-user.dto.js';
@@ -56,25 +57,30 @@ export class UsersService {
    */
   async reset(id: string) {
     await this.findOne(id);
-    return this.prisma.$transaction(async (tx) => {
-      const ownSections = { section: { plan: { userId: id } } };
-      await tx.goalMonthSnapshot.deleteMany({ where: { goal: ownSections } });
-      await tx.goal.deleteMany({ where: ownSections });
-      await tx.sectionAllocation.deleteMany({ where: ownSections });
-      await tx.rule.deleteMany({ where: { userId: id } });
-      await tx.transaction.deleteMany({ where: { userId: id } });
-      await tx.transfer.deleteMany({ where: { userId: id } });
-      await tx.incomeReceipt.deleteMany({ where: { income: { userId: id } } });
-      await tx.income.deleteMany({ where: { userId: id } });
-      await tx.listing.deleteMany({ where: { userId: id } });
-      await tx.netWorthSnapshot.deleteMany({ where: { userId: id } });
-      await tx.section.updateMany({ where: { plan: { userId: id } }, data: { parentId: null } });
-      await tx.section.deleteMany({ where: { plan: { userId: id } } });
-      await tx.plan.deleteMany({ where: { userId: id } });
-      await tx.account.deleteMany({ where: { userId: id } });
-      const plan = await tx.plan.create({ data: { userId: id, name: 'My Plan', status: 'ACTIVE' } });
-      const account = await tx.account.create({ data: { userId: id, name: 'Main Account', type: 'SPENDING', balance: 0 } });
-      return { planId: plan.id, accountId: account.id };
-    });
+    // The array form of $transaction sends the statements as one batch. The
+    // interactive callback form has a 5s default timeout, which a remote
+    // database over a serverless link blows through with this many deletes.
+    const ownSections = { section: { plan: { userId: id } } };
+    const planId = randomUUID();
+    const accountId = randomUUID();
+    await this.prisma.$transaction([
+      this.prisma.goalMonthSnapshot.deleteMany({ where: { goal: ownSections } }),
+      this.prisma.goal.deleteMany({ where: ownSections }),
+      this.prisma.sectionAllocation.deleteMany({ where: ownSections }),
+      this.prisma.rule.deleteMany({ where: { userId: id } }),
+      this.prisma.transaction.deleteMany({ where: { userId: id } }),
+      this.prisma.transfer.deleteMany({ where: { userId: id } }),
+      this.prisma.incomeReceipt.deleteMany({ where: { income: { userId: id } } }),
+      this.prisma.income.deleteMany({ where: { userId: id } }),
+      this.prisma.listing.deleteMany({ where: { userId: id } }),
+      this.prisma.netWorthSnapshot.deleteMany({ where: { userId: id } }),
+      this.prisma.section.updateMany({ where: { plan: { userId: id } }, data: { parentId: null } }),
+      this.prisma.section.deleteMany({ where: { plan: { userId: id } } }),
+      this.prisma.plan.deleteMany({ where: { userId: id } }),
+      this.prisma.account.deleteMany({ where: { userId: id } }),
+      this.prisma.plan.create({ data: { id: planId, userId: id, name: 'My Plan', status: 'ACTIVE' } }),
+      this.prisma.account.create({ data: { id: accountId, userId: id, name: 'Main Account', type: 'SPENDING', balance: 0 } }),
+    ]);
+    return { planId, accountId };
   }
 }
