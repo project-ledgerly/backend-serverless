@@ -95,6 +95,22 @@ export class AccountsService {
     if (accounts.length !== 2 || accounts.some((a) => a.userId !== dto.userId)) {
       throw new BadRequestException('Both accounts must belong to the user');
     }
+    // Money tagged to a goal counts toward it. A reserve goal has nothing to
+    // accumulate (it watches an account balance), so it can't be paid into.
+    let goalId: string | undefined;
+    if (dto.goalSectionId) {
+      const section = await this.prisma.section.findUnique({
+        where: { id: dto.goalSectionId },
+        include: { goal: true, plan: { select: { userId: true } } },
+      });
+      if (!section || section.plan.userId !== dto.userId) {
+        throw new BadRequestException('goalSectionId is not one of the user\'s sections');
+      }
+      if (!section.goal || section.goal.mode === 'RESERVE') {
+        throw new BadRequestException('That section has no goal to pay into');
+      }
+      goalId = section.goal.id;
+    }
     const [transfer] = await this.prisma.$transaction([
       this.prisma.transfer.create({
         data: {
@@ -103,11 +119,15 @@ export class AccountsService {
           toAccountId: dto.toAccountId,
           amount: amount.toFixed(2),
           note: dto.note,
+          goalSectionId: dto.goalSectionId,
           date: new Date(dto.date),
         },
       }),
       this.prisma.account.update({ where: { id: dto.fromAccountId }, data: { balance: { decrement: amount.toFixed(2) } } }),
       this.prisma.account.update({ where: { id: dto.toAccountId }, data: { balance: { increment: amount.toFixed(2) } } }),
+      ...(goalId
+        ? [this.prisma.goal.update({ where: { id: goalId }, data: { currentAmount: { increment: amount.toFixed(2) } } })]
+        : []),
     ]);
     return transfer;
   }
@@ -123,6 +143,14 @@ export class AccountsService {
     await this.prisma.$transaction([
       this.prisma.account.update({ where: { id: transfer.fromAccountId }, data: { balance: { increment: transfer.amount } } }),
       this.prisma.account.update({ where: { id: transfer.toAccountId }, data: { balance: { decrement: transfer.amount } } }),
+      ...(transfer.goalSectionId
+        ? [
+            this.prisma.goal.updateMany({
+              where: { sectionId: transfer.goalSectionId },
+              data: { currentAmount: { decrement: transfer.amount } },
+            }),
+          ]
+        : []),
       this.prisma.transfer.delete({ where: { id } }),
     ]);
   }
