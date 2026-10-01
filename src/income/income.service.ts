@@ -40,6 +40,7 @@ export class IncomeService {
         source: dto.source,
         date,
         recurring,
+        frequency: dto.frequency,
         accountId: dto.accountId,
         // First due cycle is the income's own date — if it's already in the
         // past, catch-up picks it up on the next request instead of losing it.
