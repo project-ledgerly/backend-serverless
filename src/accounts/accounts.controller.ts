@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatu
 import { ApiTags } from '@nestjs/swagger';
 import { AccountsService } from './accounts.service.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
+import { CreateTransferDto } from './dto/create-transfer.dto.js';
 import { UpdateAccountDto } from './dto/update-account.dto.js';
 
 @ApiTags('accounts')
@@ -20,6 +21,31 @@ export class AccountsController {
       throw new BadRequestException('userId query param is required');
     }
     return this.accountsService.findAllForUser(userId);
+  }
+
+  // Declared before ':accountId' so 'transfers' isn't read as an id.
+  @Post('transfers')
+  transfer(@Body() dto: CreateTransferDto) {
+    return this.accountsService.transfer(dto);
+  }
+
+  @Get('transfers')
+  findTransfers(@Query('userId') userId: string) {
+    if (!userId) {
+      throw new BadRequestException('userId query param is required');
+    }
+    return this.accountsService.findTransfers(userId);
+  }
+
+  @Delete('transfers/:transferId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  removeTransfer(@Param('transferId') transferId: string) {
+    return this.accountsService.removeTransfer(transferId);
+  }
+
+  @Post(':accountId/reset')
+  reset(@Param('accountId') accountId: string) {
+    return this.accountsService.reset(accountId);
   }
 
   @Get(':accountId')
