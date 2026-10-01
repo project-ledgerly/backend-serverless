@@ -19,10 +19,22 @@ export class TransactionsController {
     @Query('accountId') accountId?: string,
     @Query('sectionId') sectionId?: string,
     @Query('userId') userId?: string,
+    @Query('from') from?: string,
+    @Query('limit') limit?: string,
   ) {
     if (accountId) return this.transactionsService.findAllForAccount(accountId);
     if (sectionId) return this.transactionsService.findAllForSection(sectionId);
-    if (userId) return this.transactionsService.findAllForUser(userId);
+    if (userId) {
+      const fromDate = from ? new Date(from) : undefined;
+      if (fromDate && Number.isNaN(fromDate.getTime())) {
+        throw new BadRequestException('from must be a valid ISO date');
+      }
+      const parsedLimit = limit ? Number.parseInt(limit, 10) : undefined;
+      if (limit && (parsedLimit === undefined || Number.isNaN(parsedLimit))) {
+        throw new BadRequestException('limit must be an integer');
+      }
+      return this.transactionsService.findAllForUser(userId, { from: fromDate, limit: parsedLimit });
+    }
     throw new BadRequestException('accountId, sectionId, or userId query param is required');
   }
 

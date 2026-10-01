@@ -79,8 +79,19 @@ export class TransactionsService {
     return this.prisma.transaction.findMany({ where: { sectionId }, orderBy: { date: 'desc' } });
   }
 
-  findAllForUser(userId: string) {
-    return this.prisma.transaction.findMany({ where: { userId }, orderBy: { date: 'desc' }, take: 50 });
+  /**
+   * Newest first. `from` (inclusive) bounds the window — the Dashboard's
+   * monthly spending chart asks for ~6 months back — and `limit` caps the
+   * row count (default 50, max 1000) so an unbounded history never ships
+   * in one response.
+   */
+  findAllForUser(userId: string, opts: { from?: Date; limit?: number } = {}) {
+    const take = Math.min(Math.max(opts.limit ?? 50, 1), 1000);
+    return this.prisma.transaction.findMany({
+      where: { userId, ...(opts.from ? { date: { gte: opts.from } } : {}) },
+      orderBy: { date: 'desc' },
+      take,
+    });
   }
 
   async findOne(id: string) {
