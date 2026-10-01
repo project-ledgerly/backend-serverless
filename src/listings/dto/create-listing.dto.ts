@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumberString, IsString, IsUUID } from 'class-validator';
+import { IsInt, IsNotEmpty, IsNumberString, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 
 export class CreateListingDto {
   // Whose listing this is — checked against the Section's own Plan owner in
@@ -14,4 +14,11 @@ export class CreateListingDto {
   @IsNotEmpty()
   @IsNumberString()
   amount!: string;
+
+  // Day of the month the bill is due (1-31).
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(31)
+  dueDay?: number;
 }
