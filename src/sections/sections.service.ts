@@ -41,20 +41,21 @@ export class SectionsService {
   }
 
   /**
-   * A SAVINGS-type Section may only link to a SAVINGS-type Account;
-   * everything else (Essential, Goal, Flexible) may only link to a
-   * SPENDING-type Account. Money for a savings goal shouldn't be able to
-   * point at the same pot as grocery spending.
+   * A SAVINGS-type Section may only link to a SAVINGS-type Account, and
+   * Essential/Flexible sections only to a SPENDING-type Account. A GOAL
+   * section may use either: a goal to save 50,000 lives in a savings account,
+   * while a goal to spend less this month lives in a spending account.
    */
   private async assertAccountTypeMatches(sectionType: Section['type'], accountId: string) {
     const account = await this.prisma.account.findUnique({ where: { id: accountId } });
     if (!account) {
       throw new BadRequestException(`accountId ${accountId} does not exist`);
     }
+    if (sectionType === 'GOAL') return;
     const expected = sectionType === 'SAVINGS' ? 'SAVINGS' : 'SPENDING';
     if (account.type !== expected) {
       throw new BadRequestException(
-        `A ${sectionType} section can only link to a ${expected} account, but ${accountId} is ${account.type}`,
+        `A ${sectionType} section can only link to a ${expected} account, but "${account.name}" is a ${account.type} account`,
       );
     }
   }
