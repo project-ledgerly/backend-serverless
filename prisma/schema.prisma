@@ -132,6 +132,10 @@ model Goal {
   // section. A contribution (allocation credit) raises it, a withdrawal
   // (a logged or scanned spend) lowers it — same signed-amount convention.
   currentAmount       Decimal
+  // What was already set aside toward this goal when it was created (its
+  // account balance at the time). Counted in currentAmount but not as money
+  // added this month, so monthly tracking starts from zero.
+  startingAmount      Decimal  @default(0)
   // TARGET only — MONTHLY_RECURRING has no end date, it just repeats.
   targetDate          DateTime?
   // TARGET only — suggested (target - current) / monthsRemaining from

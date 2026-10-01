@@ -19,4 +19,9 @@ export class CreateGoalDto {
   @IsOptional()
   @IsBoolean()
   autoCalculated?: boolean;
+
+  // Already set aside when the goal is created (what its account holds).
+  @IsOptional()
+  @IsNumberString()
+  startingAmount?: string;
 }
