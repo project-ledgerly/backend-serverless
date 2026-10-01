@@ -99,6 +99,9 @@ model Listing {
   user      User     @relation(fields: [userId], references: [id])
   name      String
   amount    Decimal
+  // Day of the month (1-31) this bill is due. Null = no fixed due date.
+  // Months shorter than the day clamp to their last day.
+  dueDay    Int?
   createdAt DateTime @default(now())
 }
 
