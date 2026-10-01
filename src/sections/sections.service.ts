@@ -72,16 +72,54 @@ export class SectionsService {
   }
 
   /**
-   * Adds a `projectedAmount` field — the section's percentage applied to the
-   * user's current recurring income total — computed fresh on every read
-   * rather than stored, so it always reflects whatever the income is right
-   * now instead of going stale the moment income changes.
+   * Computes every section's `projectedAmount` for a whole plan in one pass
+   * — percentage applied to its parent's amount (the plan's income total
+   * for top-level sections, or the parent section's own amount for
+   * children), and the REMAINDER section in a group getting whatever's left
+   * after its PERCENTAGE siblings instead of its own (placeholder) percentage.
+   * A single section can't be decorated in isolation — a REMAINDER
+   * section's amount only means anything next to its siblings.
    */
-  private withProjectedAmount<T extends { percentage: Prisma.Decimal }>(section: T, incomeTotal: Decimal): T & { projectedAmount: string } {
-    return {
-      ...section,
-      projectedAmount: incomeTotal.times(section.percentage.toString()).dividedBy(100).toFixed(2),
+  private computeProjectedAmounts(sections: Section[], incomeTotal: Decimal): Map<string, string> {
+    const byParent = new Map<string | null, Section[]>();
+    for (const s of sections) {
+      const key = s.parentId;
+      const group = byParent.get(key);
+      if (group) group.push(s);
+      else byParent.set(key, [s]);
+    }
+
+    const amounts = new Map<string, string>();
+
+    const resolveGroup = (parentId: string | null, parentAmount: Decimal) => {
+      const siblings = byParent.get(parentId) ?? [];
+      let remainderSection: Section | undefined;
+      let percentageSum = new Decimal(0);
+
+      for (const s of siblings) {
+        if (s.allocationMode === 'REMAINDER') {
+          remainderSection = s;
+          continue;
+        }
+        const amount = parentAmount.times(s.percentage.toString()).dividedBy(100);
+        amounts.set(s.id, amount.toFixed(2));
+        percentageSum = percentageSum.plus(amount);
+        resolveGroup(s.id, amount);
+      }
+
+      if (remainderSection) {
+        const amount = parentAmount.minus(percentageSum);
+        amounts.set(remainderSection.id, amount.toFixed(2));
+        resolveGroup(remainderSection.id, amount);
+      }
     };
+
+    resolveGroup(null, incomeTotal);
+    return amounts;
+  }
+
+  private withProjectedAmounts<T extends { id: string }>(sections: T[], amounts: Map<string, string>): (T & { projectedAmount: string })[] {
+    return sections.map((s) => ({ ...s, projectedAmount: amounts.get(s.id) ?? '0.00' }));
   }
 
   async create(planId: string, dto: CreateSectionDto) {
@@ -105,32 +143,32 @@ export class SectionsService {
     this.assertSiblingGroupValid([...siblings.map(toSectionInput), pending]);
 
     try {
-      const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: planId } });
-      const [section, incomeTotal] = await Promise.all([
-        this.prisma.section.create({ data: { ...dto, planId } }),
-        this.recurringIncomeTotal(plan.userId),
-      ]);
-      return this.withProjectedAmount(section, incomeTotal);
+      const section = await this.prisma.section.create({ data: { ...dto, planId } });
+      return (await this.decoratePlanSections(planId)).find((s) => s.id === section.id)!;
     } catch (error) {
       throw this.translateWriteError(error);
     }
   }
 
-  async findAllForPlan(planId: string) {
+  /** Fetches every Section of a plan with projectedAmount computed together. */
+  private async decoratePlanSections(planId: string) {
     const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: planId } });
     const [sections, incomeTotal] = await Promise.all([
       this.prisma.section.findMany({ where: { planId }, orderBy: { priorityOrder: 'asc' } }),
       this.recurringIncomeTotal(plan.userId),
     ]);
-    return sections.map((s) => this.withProjectedAmount(s, incomeTotal));
+    const amounts = this.computeProjectedAmounts(sections, incomeTotal);
+    return this.withProjectedAmounts(sections, amounts);
+  }
+
+  findAllForPlan(planId: string) {
+    return this.decoratePlanSections(planId);
   }
 
   async findOne(id: string) {
     const section = await this.prisma.section.findUnique({ where: { id } });
     if (!section) throw new NotFoundException(`Section ${id} not found`);
-    const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: section.planId } });
-    const incomeTotal = await this.recurringIncomeTotal(plan.userId);
-    return this.withProjectedAmount(section, incomeTotal);
+    return (await this.decoratePlanSections(section.planId)).find((s) => s.id === id)!;
   }
 
   async update(id: string, dto: UpdateSectionDto) {
@@ -160,12 +198,8 @@ export class SectionsService {
     this.assertSiblingGroupValid([...newSiblings.map(toSectionInput), merged]);
 
     try {
-      const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: section.planId } });
-      const [updated, incomeTotal] = await Promise.all([
-        this.prisma.section.update({ where: { id }, data: dto }),
-        this.recurringIncomeTotal(plan.userId),
-      ]);
-      return this.withProjectedAmount(updated, incomeTotal);
+      await this.prisma.section.update({ where: { id }, data: dto });
+      return (await this.decoratePlanSections(section.planId)).find((s) => s.id === id)!;
     } catch (error) {
       throw this.translateWriteError(error);
     }
