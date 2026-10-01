@@ -28,7 +28,7 @@ export class CreateSectionDto {
 
   // Where this Section's money sits. Optional — type-matched against the
   // Section's own type in SectionsService (SAVINGS Section -> SAVINGS
-  // Account only, everything else -> SPENDING Account only).
+  // Account only, Essential/Flexible -> SPENDING Account only, GOAL -> either).
   @IsOptional()
   @IsUUID()
   accountId?: string;
