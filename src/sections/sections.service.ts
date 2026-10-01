@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, type Section } from '@prisma/client';
+import { Decimal } from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { validateSiblingGroup } from '../engine/validationService.js';
 import type { SectionInput } from '../engine/types.js';
@@ -58,6 +59,31 @@ export class SectionsService {
     }
   }
 
+  // What a Section's percentage is a share OF — the sum of the user's
+  // recurring Income amounts, i.e. what actually lands per payday. One-off
+  // income isn't included: it doesn't repeat, so it isn't part of the
+  // steady baseline a percentage allocation is meant to divide up.
+  private async recurringIncomeTotal(userId: string): Promise<Decimal> {
+    const result = await this.prisma.income.aggregate({
+      where: { userId, recurring: true },
+      _sum: { amount: true },
+    });
+    return new Decimal(result._sum.amount?.toString() ?? '0');
+  }
+
+  /**
+   * Adds a `projectedAmount` field — the section's percentage applied to the
+   * user's current recurring income total — computed fresh on every read
+   * rather than stored, so it always reflects whatever the income is right
+   * now instead of going stale the moment income changes.
+   */
+  private withProjectedAmount<T extends { percentage: Prisma.Decimal }>(section: T, incomeTotal: Decimal): T & { projectedAmount: string } {
+    return {
+      ...section,
+      projectedAmount: incomeTotal.times(section.percentage.toString()).dividedBy(100).toFixed(2),
+    };
+  }
+
   async create(planId: string, dto: CreateSectionDto) {
     await this.assertParentInPlan(planId, dto.parentId);
     if (dto.accountId) {
@@ -79,23 +105,32 @@ export class SectionsService {
     this.assertSiblingGroupValid([...siblings.map(toSectionInput), pending]);
 
     try {
-      return await this.prisma.section.create({ data: { ...dto, planId } });
+      const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: planId } });
+      const [section, incomeTotal] = await Promise.all([
+        this.prisma.section.create({ data: { ...dto, planId } }),
+        this.recurringIncomeTotal(plan.userId),
+      ]);
+      return this.withProjectedAmount(section, incomeTotal);
     } catch (error) {
       throw this.translateWriteError(error);
     }
   }
 
-  findAllForPlan(planId: string) {
-    return this.prisma.section.findMany({
-      where: { planId },
-      orderBy: { priorityOrder: 'asc' },
-    });
+  async findAllForPlan(planId: string) {
+    const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: planId } });
+    const [sections, incomeTotal] = await Promise.all([
+      this.prisma.section.findMany({ where: { planId }, orderBy: { priorityOrder: 'asc' } }),
+      this.recurringIncomeTotal(plan.userId),
+    ]);
+    return sections.map((s) => this.withProjectedAmount(s, incomeTotal));
   }
 
   async findOne(id: string) {
     const section = await this.prisma.section.findUnique({ where: { id } });
     if (!section) throw new NotFoundException(`Section ${id} not found`);
-    return section;
+    const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: section.planId } });
+    const incomeTotal = await this.recurringIncomeTotal(plan.userId);
+    return this.withProjectedAmount(section, incomeTotal);
   }
 
   async update(id: string, dto: UpdateSectionDto) {
@@ -125,7 +160,12 @@ export class SectionsService {
     this.assertSiblingGroupValid([...newSiblings.map(toSectionInput), merged]);
 
     try {
-      return await this.prisma.section.update({ where: { id }, data: dto });
+      const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: section.planId } });
+      const [updated, incomeTotal] = await Promise.all([
+        this.prisma.section.update({ where: { id }, data: dto }),
+        this.recurringIncomeTotal(plan.userId),
+      ]);
+      return this.withProjectedAmount(updated, incomeTotal);
     } catch (error) {
       throw this.translateWriteError(error);
     }
