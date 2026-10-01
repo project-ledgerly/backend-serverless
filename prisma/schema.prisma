@@ -75,11 +75,12 @@ model Section {
   accountId String?
   account   Account? @relation(fields: [accountId], references: [id])
 
-  goal        Goal?
-  transactions Transaction[]
-  rules       Rule[]
-  allocations SectionAllocation[]
-  listings    Listing[]
+  goal          Goal?
+  goalTransfers Transfer[]
+  transactions  Transaction[]
+  rules         Rule[]
+  allocations   SectionAllocation[]
+  listings      Listing[]
 
   // Rule 3 (exactly one REMAINDER section per sibling group) is enforced by a
   // partial unique index added by hand in the init migration — Prisma's
@@ -114,29 +115,33 @@ enum GoalMode {
   // currentAmount tracks only the active calendar month; GoalSchedulerService
   // rolls it into a GoalMonthSnapshot at month boundary and resets to 0.
   MONTHLY_RECURRING
+  // Keep at least targetAmount in the account the goal's section is linked
+  // to (a reserve / floor). There is nothing to accumulate: progress is the
+  // live account balance against targetAmount, so currentAmount is unused.
+  RESERVE
 }
 
 model Goal {
-  id            String   @id @default(uuid())
-  sectionId     String   @unique
-  section       Section  @relation(fields: [sectionId], references: [id])
-  mode          GoalMode @default(TARGET)
-  targetAmount  Decimal
+  id                  String    @id @default(uuid())
+  sectionId           String    @unique
+  section             Section   @relation(fields: [sectionId], references: [id])
+  mode                GoalMode  @default(TARGET)
+  targetAmount        Decimal
   // Derived, not hand-set — TransactionsService adjusts this the same way it
   // adjusts Account.balance, on every Transaction tagged to this Goal's
   // section. A contribution (allocation credit) raises it, a withdrawal
   // (a logged or scanned spend) lowers it — same signed-amount convention.
-  currentAmount Decimal
+  currentAmount       Decimal
   // TARGET only — MONTHLY_RECURRING has no end date, it just repeats.
-  targetDate    DateTime?
+  targetDate          DateTime?
   // TARGET only — suggested (target - current) / monthsRemaining from
   // sinkingFundCalculator; MONTHLY_RECURRING has no separate figure, its
   // targetAmount already IS the monthly commitment.
   monthlyContribution Decimal?
-  autoCalculated      Boolean  @default(true)
+  autoCalculated      Boolean   @default(true)
   // MONTHLY_RECURRING only — start of the calendar month currentAmount is
   // currently tracking. Null for TARGET goals.
-  currentPeriodStart DateTime?
+  currentPeriodStart  DateTime?
 
   monthSnapshots GoalMonthSnapshot[]
 }
@@ -233,12 +238,12 @@ model Account {
   type    AccountType
   balance Decimal
 
-  transactions Transaction[]
-  sections     Section[]
-  incomes      Income[]
+  transactions   Transaction[]
+  sections       Section[]
+  incomes        Income[]
   incomeReceipts IncomeReceipt[]
-  transfersOut Transfer[]    @relation("TransferFrom")
-  transfersIn  Transfer[]    @relation("TransferTo")
+  transfersOut   Transfer[]      @relation("TransferFrom")
+  transfersIn    Transfer[]      @relation("TransferTo")
 }
 
 /// Money moved between two of a user's own accounts (salary -> savings).
@@ -254,6 +259,10 @@ model Transfer {
   toAccount     Account  @relation("TransferTo", fields: [toAccountId], references: [id])
   amount        Decimal
   note          String?
+  // The goal section this transfer pays into (salary -> savings for a goal).
+  // Raises that Goal's currentAmount by the same amount.
+  goalSectionId String?
+  goalSection   Section? @relation(fields: [goalSectionId], references: [id], onDelete: SetNull)
   date          DateTime
   createdAt     DateTime @default(now())
 }

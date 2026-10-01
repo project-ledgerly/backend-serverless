@@ -39,9 +39,10 @@ export class TransactionsService {
    * same signed-amount convention as Account.balance — a savings
    * withdrawal deducts from what was already committed, per spec.
    */
-  private goalDeltaOp(goalId: string | undefined, amount: Prisma.Decimal.Value) {
-    if (!goalId) return [];
-    return [this.prisma.goal.update({ where: { id: goalId }, data: { currentAmount: { increment: amount } } })];
+  private goalDeltaOp(goal: { id: string; mode: string } | null | undefined, amount: Prisma.Decimal.Value) {
+    // A RESERVE goal watches an account balance; it has no running total.
+    if (!goal || goal.mode === 'RESERVE') return [];
+    return [this.prisma.goal.update({ where: { id: goal.id }, data: { currentAmount: { increment: amount } } })];
   }
 
   async create(dto: CreateTransactionDto) {
@@ -66,7 +67,7 @@ export class TransactionsService {
         where: { id: dto.accountId },
         data: { balance: { increment: dto.amount } },
       }),
-      ...this.goalDeltaOp(section.goal?.id, dto.amount),
+      ...this.goalDeltaOp(section.goal, dto.amount),
     ]);
     return transaction;
   }
@@ -135,8 +136,8 @@ export class TransactionsService {
         where: { id: newAccountId },
         data: { balance: { increment: newAmount } },
       }),
-      ...this.goalDeltaOp(oldSection?.goal?.id, transaction.amount.negated()),
-      ...this.goalDeltaOp(newSection?.goal?.id, newAmount),
+      ...this.goalDeltaOp(oldSection?.goal, transaction.amount.negated()),
+      ...this.goalDeltaOp(newSection?.goal, newAmount),
       this.prisma.transaction.update({ where: { id }, data: definedUpdates }),
     ];
     const results = await this.prisma.$transaction(ops);
@@ -151,7 +152,7 @@ export class TransactionsService {
         where: { id: transaction.accountId },
         data: { balance: { decrement: transaction.amount } },
       }),
-      ...this.goalDeltaOp(section?.goal?.id, transaction.amount.negated()),
+      ...this.goalDeltaOp(section?.goal, transaction.amount.negated()),
       this.prisma.transaction.delete({ where: { id } }),
     ]);
   }

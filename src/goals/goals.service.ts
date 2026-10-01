@@ -21,8 +21,25 @@ export class GoalsService {
     }
 
     const mode = dto.mode ?? GoalMode.TARGET;
+    if (!new Prisma.Decimal(dto.targetAmount).gt(0)) {
+      throw new BadRequestException('targetAmount must be greater than 0');
+    }
     if (mode === GoalMode.TARGET && !dto.targetDate) {
       throw new BadRequestException('targetDate is required for a TARGET-mode goal');
+    }
+    if (mode === GoalMode.RESERVE) {
+      // Keep at least targetAmount in the section's account: there has to be
+      // an account, and it has to hold that much today, or the goal would be
+      // broken from the moment it is set.
+      if (!section.accountId) {
+        throw new BadRequestException('A reserve goal needs a section linked to an account');
+      }
+      const account = await this.prisma.account.findUnique({ where: { id: section.accountId } });
+      if (account && account.balance.lt(dto.targetAmount)) {
+        throw new BadRequestException(
+          `"${account.name}" holds ${account.balance.toFixed(2)}, which is less than the ${new Prisma.Decimal(dto.targetAmount).toFixed(2)} you want to keep in it`,
+        );
+      }
     }
 
     const now = new Date();
@@ -65,7 +82,7 @@ export class GoalsService {
   async findAllForUser(userId: string) {
     const goals = await this.prisma.goal.findMany({
       where: { section: { plan: { userId } } },
-      include: { section: { select: { name: true } } },
+      include: { section: { select: { name: true, accountId: true } } },
       orderBy: { id: 'asc' },
     });
     if (goals.length === 0) return [];
@@ -77,10 +94,22 @@ export class GoalsService {
       monthEnds.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - monthsAgo + 1, 1)));
     }
 
-    const transactions = await this.prisma.transaction.findMany({
-      where: { sectionId: { in: goals.map((g) => g.sectionId) } },
-      select: { sectionId: true, amount: true, date: true },
-    });
+    const sectionIds = goals.map((g) => g.sectionId);
+    const [spent, paidIn] = await Promise.all([
+      this.prisma.transaction.findMany({
+        where: { sectionId: { in: sectionIds } },
+        select: { sectionId: true, amount: true, date: true },
+      }),
+      // Transfers tagged to a goal add to it the same way.
+      this.prisma.transfer.findMany({
+        where: { goalSectionId: { in: sectionIds } },
+        select: { goalSectionId: true, amount: true, date: true },
+      }),
+    ]);
+    const transactions = [
+      ...spent,
+      ...paidIn.map((t) => ({ sectionId: t.goalSectionId!, amount: t.amount, date: t.date })),
+    ];
 
     return goals.map(({ section, ...goal }) => {
       const mine = transactions.filter((t) => t.sectionId === goal.sectionId);
@@ -91,7 +120,7 @@ export class GoalsService {
           .reduce((sum, t) => sum.plus(t.amount), new Prisma.Decimal(0));
         return total.toFixed(2);
       });
-      return { ...goal, name: section.name, history };
+      return { ...goal, name: section.name, accountId: section.accountId, history };
     });
   }
 

@@ -21,4 +21,9 @@ export class CreateTransferDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  // The goal section this money is for; counts toward that goal's progress.
+  @IsOptional()
+  @IsUUID()
+  goalSectionId?: string;
 }
