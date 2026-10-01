@@ -4,6 +4,7 @@ import { AppService } from './app.service.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { PlansModule } from './plans/plans.module.js';
 import { SectionsModule } from './sections/sections.module.js';
+import { ListingsModule } from './listings/listings.module.js';
 import { IncomeModule } from './income/income.module.js';
 import { TransactionsModule } from './transactions/transactions.module.js';
 import { AccountsModule } from './accounts/accounts.module.js';
@@ -16,6 +17,7 @@ import { AuthModule } from './auth/auth.module.js';
     PrismaModule,
     PlansModule,
     SectionsModule,
+    ListingsModule,
     IncomeModule,
     TransactionsModule,
     AccountsModule,

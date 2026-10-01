@@ -26,6 +26,7 @@ model User {
   transactions      Transaction[]
   rules             Rule[]
   netWorthSnapshots NetWorthSnapshot[]
+  listings          Listing[]
 }
 
 model Plan {
@@ -77,10 +78,28 @@ model Section {
   transactions Transaction[]
   rules       Rule[]
   allocations SectionAllocation[]
+  listings    Listing[]
 
   // Rule 3 (exactly one REMAINDER section per sibling group) is enforced by a
   // partial unique index added by hand in the init migration — Prisma's
   // schema language can't express a filtered/expression index.
+}
+
+// A line item a user plans to spend out of a Section's allocation (e.g.
+// "Netflix" under a Flexible/Essentials section) — distinct from Transaction,
+// which is an actual logged/scanned spend. Listings are the onboarding
+// wizard's planning layer; they don't move money or affect Account.balance.
+// Scoped by both sectionId and userId (not derived through the Section/Plan
+// chain) so an ownership check is a single indexed lookup, not a join.
+model Listing {
+  id        String   @id @default(uuid())
+  sectionId String
+  section   Section  @relation(fields: [sectionId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  amount    Decimal
+  createdAt DateTime @default(now())
 }
 
 enum GoalMode {
@@ -133,8 +152,15 @@ model GoalMonthSnapshot {
   createdAt    DateTime @default(now())
 }
 
+enum IncomeFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  YEARLY
+}
+
 // A definition, not a running total: one-off income is a single event,
-// recurring income is the template a monthly cycle repeats. Either way the
+// recurring income is the template a cycle repeats. Either way the
 // actual money-received history lives in IncomeReceipt, one row per credit.
 model Income {
   id        String   @id @default(uuid())
@@ -145,11 +171,14 @@ model Income {
   date      DateTime
   recurring Boolean  @default(false)
 
+  // Recurring only — how often nextRunDate advances. Null for one-off income.
+  frequency IncomeFrequency?
+
   // Which Account gets credited. Recurring only: the next due date — catch-up
   // is lazy, nothing runs on a schedule; a request
-  // (IncomeSchedulerService.catchUp) walks nextRunDate forward one month at
-  // a time for every cycle that's already due, crediting the Account and
-  // logging a receipt each time, until it's not in the past anymore.
+  // (IncomeSchedulerService.catchUp) walks nextRunDate forward by `frequency`
+  // for every cycle that's already due, crediting the Account and logging a
+  // receipt each time, until it's not in the past anymore.
   accountId   String
   account     Account   @relation(fields: [accountId], references: [id])
   nextRunDate DateTime?

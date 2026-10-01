@@ -9,6 +9,7 @@ export interface AuthResult {
   accessToken: string;
   userId: string;
   planId: string | null;
+  accountId: string | null;
   name: string;
   currency: string;
 }
@@ -30,22 +31,25 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
 
-    // One call creates both the User and its default Plan — the old
-    // passwordless flow (mobile/) made the caller do this as two separate
+    // One call creates the User, its default Plan, and its default Account —
+    // the old passwordless flow (mobile/) made the caller do this as separate
     // requests; email/password registration is a natural point to fold it
-    // into one.
-    const { user, planId } = await this.prisma.$transaction(async (tx) => {
+    // into one, so the onboarding wizard always has an accountId to use.
+    const { user, planId, accountId } = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: { name: dto.name, email: dto.email, passwordHash, currency: dto.currency },
       });
       const plan = await tx.plan.create({
         data: { userId: user.id, name: 'My Plan', status: 'ACTIVE' },
       });
-      return { user, planId: plan.id };
+      const account = await tx.account.create({
+        data: { userId: user.id, name: 'Main Account', type: 'SPENDING', balance: 0 },
+      });
+      return { user, planId: plan.id, accountId: account.id };
     });
 
     const accessToken = await this.jwt.signAsync({ sub: user.id });
-    return { accessToken, userId: user.id, planId, name: user.name, currency: user.currency };
+    return { accessToken, userId: user.id, planId, accountId, name: user.name, currency: user.currency };
   }
 
   async login(dto: LoginDto): Promise<AuthResult> {
@@ -61,8 +65,19 @@ export class AuthService {
       where: { userId: user.id },
       orderBy: { createdAt: 'asc' },
     });
+    const account = await this.prisma.account.findFirst({
+      where: { userId: user.id },
+      orderBy: { id: 'asc' },
+    });
 
     const accessToken = await this.jwt.signAsync({ sub: user.id });
-    return { accessToken, userId: user.id, planId: plan?.id ?? null, name: user.name, currency: user.currency };
+    return {
+      accessToken,
+      userId: user.id,
+      planId: plan?.id ?? null,
+      accountId: account?.id ?? null,
+      name: user.name,
+      currency: user.currency,
+    };
   }
 }
