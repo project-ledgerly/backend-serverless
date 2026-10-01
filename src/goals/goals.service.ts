@@ -54,6 +54,47 @@ export class GoalsService {
     }
   }
 
+  /**
+   * Every Goal across the user's plans, each with its Section's name (a Goal
+   * has no name of its own) and `history`: the goal's running total at the
+   * end of each of the last 6 calendar months (the current month's point is
+   * the live currentAmount), derived from the Transactions on its Section —
+   * the same ledger currentAmount itself is derived from. Feeds the
+   * Dashboard's goal trend lines.
+   */
+  async findAllForUser(userId: string) {
+    const goals = await this.prisma.goal.findMany({
+      where: { section: { plan: { userId } } },
+      include: { section: { select: { name: true } } },
+      orderBy: { id: 'asc' },
+    });
+    if (goals.length === 0) return [];
+
+    const now = new Date();
+    const monthEnds: Date[] = [];
+    for (let monthsAgo = 5; monthsAgo >= 0; monthsAgo--) {
+      // Day 0 of the next month = last instant-ish of this one.
+      monthEnds.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - monthsAgo + 1, 1)));
+    }
+
+    const transactions = await this.prisma.transaction.findMany({
+      where: { sectionId: { in: goals.map((g) => g.sectionId) } },
+      select: { sectionId: true, amount: true, date: true },
+    });
+
+    return goals.map(({ section, ...goal }) => {
+      const mine = transactions.filter((t) => t.sectionId === goal.sectionId);
+      const history = monthEnds.map((end, i) => {
+        if (i === monthEnds.length - 1) return goal.currentAmount.toFixed(2);
+        const total = mine
+          .filter((t) => t.date < end)
+          .reduce((sum, t) => sum.plus(t.amount), new Prisma.Decimal(0));
+        return total.toFixed(2);
+      });
+      return { ...goal, name: section.name, history };
+    });
+  }
+
   async findForSection(sectionId: string) {
     const goal = await this.prisma.goal.findUnique({ where: { sectionId } });
     if (!goal) throw new NotFoundException(`Section ${sectionId} has no Goal`);

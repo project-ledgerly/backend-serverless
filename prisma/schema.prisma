@@ -27,6 +27,7 @@ model User {
   rules             Rule[]
   netWorthSnapshots NetWorthSnapshot[]
   listings          Listing[]
+  transfers         Transfer[]
 }
 
 model Plan {
@@ -99,6 +100,9 @@ model Listing {
   user      User     @relation(fields: [userId], references: [id])
   name      String
   amount    Decimal
+  // Day of the month (1-31) this bill is due. Null = no fixed due date.
+  // Months shorter than the day clamp to their last day.
+  dueDay    Int?
   createdAt DateTime @default(now())
 }
 
@@ -233,6 +237,25 @@ model Account {
   sections     Section[]
   incomes      Income[]
   incomeReceipts IncomeReceipt[]
+  transfersOut Transfer[]    @relation("TransferFrom")
+  transfersIn  Transfer[]    @relation("TransferTo")
+}
+
+/// Money moved between two of a user's own accounts (salary -> savings).
+/// Not a spend, so it has no Section and never touches a budget; it only
+/// shifts balance from one Account to the other. Additive.
+model Transfer {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  fromAccountId String
+  fromAccount   Account  @relation("TransferFrom", fields: [fromAccountId], references: [id])
+  toAccountId   String
+  toAccount     Account  @relation("TransferTo", fields: [toAccountId], references: [id])
+  amount        Decimal
+  note          String?
+  date          DateTime
+  createdAt     DateTime @default(now())
 }
 
 model Transaction {

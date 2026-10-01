@@ -26,8 +26,13 @@ export class ListingsService {
   async create(sectionId: string, dto: CreateListingDto) {
     await this.assertUserOwnsSection(sectionId, dto.userId);
     return this.prisma.listing.create({
-      data: { sectionId, userId: dto.userId, name: dto.name, amount: dto.amount },
+      data: { sectionId, userId: dto.userId, name: dto.name, amount: dto.amount, dueDay: dto.dueDay ?? null },
     });
+  }
+
+  /** Every listing the user has across all their sections (the Bills page). */
+  findAllForUser(userId: string) {
+    return this.prisma.listing.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } });
   }
 
   findAllForSection(sectionId: string) {

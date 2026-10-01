@@ -41,20 +41,21 @@ export class SectionsService {
   }
 
   /**
-   * A SAVINGS-type Section may only link to a SAVINGS-type Account;
-   * everything else (Essential, Goal, Flexible) may only link to a
-   * SPENDING-type Account. Money for a savings goal shouldn't be able to
-   * point at the same pot as grocery spending.
+   * A SAVINGS-type Section may only link to a SAVINGS-type Account, and
+   * Essential/Flexible sections only to a SPENDING-type Account. A GOAL
+   * section may use either: a goal to save 50,000 lives in a savings account,
+   * while a goal to spend less this month lives in a spending account.
    */
   private async assertAccountTypeMatches(sectionType: Section['type'], accountId: string) {
     const account = await this.prisma.account.findUnique({ where: { id: accountId } });
     if (!account) {
       throw new BadRequestException(`accountId ${accountId} does not exist`);
     }
+    if (sectionType === 'GOAL') return;
     const expected = sectionType === 'SAVINGS' ? 'SAVINGS' : 'SPENDING';
     if (account.type !== expected) {
       throw new BadRequestException(
-        `A ${sectionType} section can only link to a ${expected} account, but ${accountId} is ${account.type}`,
+        `A ${sectionType} section can only link to a ${expected} account, but "${account.name}" is a ${account.type} account`,
       );
     }
   }
@@ -208,7 +209,12 @@ export class SectionsService {
   async remove(id: string) {
     await this.findOne(id);
     try {
-      await this.prisma.section.delete({ where: { id } });
+      // A section's listings go with it (they have no meaning without it);
+      // one transaction so a section that can't be deleted keeps its listings.
+      await this.prisma.$transaction([
+        this.prisma.listing.deleteMany({ where: { sectionId: id } }),
+        this.prisma.section.delete({ where: { id } }),
+      ]);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
         throw new ConflictException('Section still has a goal, transactions, rules, or allocations attached');

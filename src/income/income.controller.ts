@@ -1,8 +1,9 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { IncomeService } from './income.service.js';
 import { IncomeSchedulerService } from './income-scheduler.service.js';
 import { CreateIncomeDto } from './dto/create-income.dto.js';
+import { UpdateIncomeDto } from './dto/update-income.dto.js';
 
 @ApiTags('income')
 @Controller('incomes')
@@ -49,5 +50,16 @@ export class IncomeController {
   @Get(':incomeId')
   findOne(@Param('incomeId') incomeId: string) {
     return this.incomeService.findOne(incomeId);
+  }
+
+  @Patch(':incomeId')
+  update(@Param('incomeId') incomeId: string, @Body() dto: UpdateIncomeDto) {
+    return this.incomeService.update(incomeId, dto);
+  }
+
+  @Delete(':incomeId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('incomeId') incomeId: string) {
+    return this.incomeService.remove(incomeId);
   }
 }

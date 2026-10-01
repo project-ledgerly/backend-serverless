@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { ListingsService } from './listings.service.js';
 import { CreateListingDto } from './dto/create-listing.dto.js';
@@ -12,6 +12,14 @@ export class ListingsController {
   @Post('sections/:sectionId/listings')
   create(@Param('sectionId') sectionId: string, @Body() dto: CreateListingDto) {
     return this.listingsService.create(sectionId, dto);
+  }
+
+  @Get('listings')
+  findAllForUser(@Query('userId') userId: string) {
+    if (!userId) {
+      throw new BadRequestException('userId query param is required');
+    }
+    return this.listingsService.findAllForUser(userId);
   }
 
   @Get('sections/:sectionId/listings')
