@@ -4,7 +4,7 @@
 export interface SnapshotInput {
   now: Date;
   user: { name: string; currency: string };
-  accounts: Array<{ id: string; name: string; type: string; balance: number }>;
+  accounts: Array<{ id: string; name: string; type: string; balance: number; identifiers?: string[] }>;
   incomes: Array<{
     id: string;
     source: string;
@@ -53,6 +53,7 @@ export interface Transaction {
   accountId: string;
   sectionId: string;
   listingId: string | null;
+  merchant?: string | null;
 }
 
 const round = (n: number) => Math.round(n * 100) / 100;
@@ -160,7 +161,14 @@ export function buildSnapshot(input: SnapshotInput) {
     currency: input.user.currency,
     // Said out loud so the AI doesn't assume it can see everything.
     limitedToAccounts: limited ? accounts.map((a) => a.name) : null,
-    accounts: accounts.map((a) => ({ id: a.id, name: a.name, type: a.type, balance: round(a.balance) })),
+    accounts: accounts.map((a) => ({
+      id: a.id,
+      name: a.name,
+      type: a.type,
+      balance: round(a.balance),
+      // How the bank prints this account (number or last digits), to recognise a statement.
+      identifiers: a.identifiers ?? [],
+    })),
     incomes: input.incomes
       .filter((i) => allowed(i.accountId))
       .map((i) => ({
@@ -184,6 +192,7 @@ export function buildSnapshot(input: SnapshotInput) {
       date: t.date.toISOString().slice(0, 10),
       amount: round(t.amount),
       description: t.description,
+      merchant: t.merchant ?? null,
       account: accountName.get(t.accountId) ?? null,
       section: sectionName.get(t.sectionId) ?? null,
       bill: t.listingId ? (listingName.get(t.listingId) ?? null) : null,

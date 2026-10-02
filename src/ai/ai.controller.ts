@@ -3,7 +3,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthContext } from '../auth/auth-context.js';
 import { CurrentAuth, RequireScopes } from '../auth/auth.decorators.js';
+import { AccountLinkService } from './account-link.service.js';
 import { BatchService } from './batch.service.js';
+import { LinkAccountDto } from './dto/link-account.dto.js';
 import { LogBatchDto } from './dto/log-batch.dto.js';
 import { SnapshotService } from './snapshot.service.js';
 
@@ -17,6 +19,7 @@ export class AiController {
     private readonly prisma: PrismaService,
     private readonly snapshots: SnapshotService,
     private readonly batches: BatchService,
+    private readonly accountLinks: AccountLinkService,
   ) {}
 
   /** Who the token belongs to and what it may do. The MCP calls this first. */
@@ -66,5 +69,16 @@ export class AiController {
   @RequireScopes('transactions:write')
   undoBatch(@CurrentAuth() auth: AuthContext, @Param('batchId') batchId: string) {
     return this.batches.undo(auth.userId, batchId);
+  }
+
+  /**
+   * Remembers how the bank prints one of the user's accounts (its number, or
+   * the last digits) so later statements are recognised without asking.
+   */
+  @Post('accounts/:accountId/identifiers')
+  @HttpCode(HttpStatus.OK)
+  @RequireScopes('accounts:write')
+  linkAccount(@CurrentAuth() auth: AuthContext, @Param('accountId') accountId: string, @Body() dto: LinkAccountDto) {
+    return this.accountLinks.link(auth.userId, accountId, dto.identifier);
   }
 }
