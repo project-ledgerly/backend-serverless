@@ -29,6 +29,7 @@ model User {
   listings          Listing[]
   transfers         Transfer[]
   apiTokens         ApiToken[]
+  batches           Batch[]
 }
 
 model Plan {
@@ -274,6 +275,11 @@ model Transfer {
   goalSection   Section? @relation(fields: [goalSectionId], references: [id], onDelete: SetNull)
   date          DateTime
   createdAt     DateTime @default(now())
+  // The AI import this came from, if any, so the whole import can be undone.
+  batchId       String?
+  batch         Batch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@index([batchId])
 }
 
 model Transaction {
@@ -296,6 +302,11 @@ model Transaction {
   // by an actual link instead of guessing from the description.
   listingId   String?
   listing     Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  // The AI import this came from, if any, so the whole import can be undone.
+  batchId     String?
+  batch       Batch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@index([batchId])
 }
 
 model Rule {
@@ -338,4 +349,24 @@ model ApiToken {
   revokedAt  DateTime?
 
   @@index([userId])
+}
+
+// One AI import (a statement logged in bulk). Everything it created points back
+// here through batchId, which is what lets the whole import be undone at once.
+model Batch {
+  id               String        @id @default(uuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // The API token that made it, kept as plain text so it outlives the token.
+  tokenId          String?
+  summary          String?
+  transactionCount Int           @default(0)
+  transferCount    Int           @default(0)
+  createdAt        DateTime      @default(now())
+  // Set when the import was undone; the rows it created are deleted then.
+  undoneAt         DateTime?
+  transactions     Transaction[]
+  transfers        Transfer[]
+
+  @@index([userId, createdAt])
 }
