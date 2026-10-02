@@ -105,6 +105,10 @@ model Listing {
   // Months shorter than the day clamp to their last day.
   dueDay    Int?
   createdAt DateTime @default(now())
+
+  // Expenses recorded against this bill. Deleting the bill keeps them (the
+  // spend happened), they just lose the link.
+  transactions Transaction[]
 }
 
 enum GoalMode {
@@ -287,6 +291,10 @@ model Transaction {
   description String
   date        DateTime
   source      String
+  // The bill (Listing) this expense paid, if any. Lets a bill be marked paid
+  // by an actual link instead of guessing from the description.
+  listingId   String?
+  listing     Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
 }
 
 model Rule {
