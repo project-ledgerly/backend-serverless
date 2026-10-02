@@ -12,6 +12,7 @@ import { GoalsModule } from './goals/goals.module.js';
 import { UsersModule } from './users/users.module.js';
 import { AiModule } from './ai/ai.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { OAuthModule } from './oauth/oauth.module.js';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { AuthModule } from './auth/auth.module.js';
     GoalsModule,
     UsersModule,
     AuthModule,
+    OAuthModule,
     AiModule,
   ],
   controllers: [AppController],
