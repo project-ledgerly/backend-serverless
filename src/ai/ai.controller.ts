@@ -13,6 +13,9 @@ import {
   ReconcileDto,
   UpdateTransactionsDto,
 } from './dto/records.dto.js';
+import { EditPlanDto, RecordIncomeDto } from './dto/edit-plan.dto.js';
+import { IncomeRecordService } from './income-record.service.js';
+import { PlanEditService } from './plan-edit.service.js';
 import { RecordsService } from './records.service.js';
 import { LogBatchDto } from './dto/log-batch.dto.js';
 import { SnapshotService } from './snapshot.service.js';
@@ -29,6 +32,8 @@ export class AiController {
     private readonly batches: BatchService,
     private readonly accountLinks: AccountLinkService,
     private readonly records: RecordsService,
+    private readonly planEdits: PlanEditService,
+    private readonly incomeRecords: IncomeRecordService,
   ) {}
 
   /** Who the token belongs to and what it may do. The MCP calls this first. */
@@ -133,5 +138,25 @@ export class AiController {
   @RequireScopes('accounts:write')
   reconcile(@CurrentAuth() auth: AuthContext, @Param('accountId') accountId: string, @Body() dto: ReconcileDto) {
     return this.records.reconcile(auth, accountId, dto);
+  }
+
+  /**
+   * Changes the plan: sections and their percentages, bills, goals, recurring
+   * incomes, accounts. A list of ops applied in order, all or nothing (a
+   * failure rolls everything back). Reversible with undo.
+   */
+  @Post('plan/edit')
+  @HttpCode(HttpStatus.OK)
+  @RequireScopes('plan:write')
+  editPlan(@CurrentAuth() auth: AuthContext, @Body() dto: EditPlanDto) {
+    return this.planEdits.edit(auth, dto);
+  }
+
+  /** Records money that has arrived (a fee, a gift): credits the account and keeps a receipt. Reversible. */
+  @Post('income/record')
+  @HttpCode(HttpStatus.OK)
+  @RequireScopes('transactions:write')
+  recordIncome(@CurrentAuth() auth: AuthContext, @Body() dto: RecordIncomeDto) {
+    return this.incomeRecords.record(auth, dto);
   }
 }

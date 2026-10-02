@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthContext } from '../auth/auth-context.js';
 import { describeErrors, fromCents, planBatch, toCents } from './batch.planner.js';
+import { IncomeRecordService } from './income-record.service.js';
+import { PlanEditService } from './plan-edit.service.js';
 import { RecordsService } from './records.service.js';
 import type { LogBatchDto } from './dto/log-batch.dto.js';
 
@@ -17,6 +19,8 @@ export class BatchService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly records: RecordsService,
+    private readonly planEdits: PlanEditService,
+    private readonly incomeRecords: IncomeRecordService,
   ) {}
 
   async log(auth: AuthContext, dto: LogBatchDto) {
@@ -195,6 +199,8 @@ export class BatchService {
     const batch = await this.prisma.batch.findFirst({ where: { id: batchId, userId } });
     if (!batch) throw new NotFoundException('Batch not found');
     if (batch.undoneAt) return { batchId, alreadyUndone: true, removed: { transactions: 0, transfers: 0 } };
+    if (batch.kind === 'plan') return this.planEdits.undo(batch);
+    if (batch.kind === 'income') return this.incomeRecords.undo(batch);
     if (batch.kind !== 'import') return this.records.undo(batch);
 
     const [transactions, transfers] = await Promise.all([

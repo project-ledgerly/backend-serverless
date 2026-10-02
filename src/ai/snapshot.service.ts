@@ -22,7 +22,7 @@ export class SnapshotService {
     const now = new Date();
     const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
-    const [user, accounts, incomes, plan, listings, goals, monthTransactions, recentTransactions] = await Promise.all([
+    const [user, accounts, incomes, plan, listings, goals, monthTransactions, recentTransactions, receipts] = await Promise.all([
       this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true, currency: true } }),
       this.prisma.account.findMany({ where: { userId }, orderBy: { name: 'asc' } }),
       this.prisma.income.findMany({ where: { userId }, orderBy: { date: 'desc' } }),
@@ -35,6 +35,12 @@ export class SnapshotService {
         take: MONTH_LIMIT,
       }),
       this.prisma.transaction.findMany({ where: { userId }, orderBy: { date: 'desc' }, take: RECENT_COUNT }),
+      this.prisma.incomeReceipt.findMany({
+        where: { income: { userId } },
+        orderBy: { date: 'desc' },
+        take: 60,
+        include: { income: { select: { source: true } } },
+      }),
     ]);
 
     const sections = plan ? await this.sections.findAllForPlan(plan.id) : [];
@@ -96,6 +102,13 @@ export class SnapshotService {
         currentAmount: num(g.currentAmount),
         startingAmount: num(g.startingAmount),
         targetDate: g.targetDate,
+      })),
+      incomeReceipts: receipts.map((r) => ({
+        id: r.id,
+        amount: num(r.amount),
+        date: r.date,
+        accountId: r.accountId,
+        source: r.income.source,
       })),
       monthTransactions: monthTransactions.map(tx),
       recentTransactions: recentTransactions.map(tx),

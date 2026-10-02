@@ -43,7 +43,7 @@ function input(over: Partial<SnapshotInput> = {}): SnapshotInput {
 describe('buildSnapshot', () => {
   it('sums this month by section, and splits money out from money in', () => {
     const s = buildSnapshot(input());
-    expect(s.thisMonth).toEqual({ from: '2026-10-01', to: '2026-10-31', spent: 840, received: 25 });
+    expect(s.thisMonth).toEqual({ from: '2026-10-01', to: '2026-10-31', spent: 840, received: 25, incomeReceived: 0 });
     const flex = s.plan!.sections.find((x) => x.name === 'Flexible')!;
     expect(flex.spentThisMonth).toBe(40);
     expect(flex.receivedThisMonth).toBe(25);

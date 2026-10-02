@@ -37,6 +37,8 @@ export interface SnapshotInput {
     startingAmount: number;
     targetDate: Date | null;
   }>;
+  /** Income that actually arrived (one-off payments and each recurring cycle), latest first. */
+  incomeReceipts?: Array<{ id: string; amount: number; date: Date; accountId: string; source: string }>;
   /** Every transaction dated in the current month. */
   monthTransactions: Transaction[];
   /** The latest few transactions, any month. */
@@ -77,6 +79,9 @@ export function buildSnapshot(input: SnapshotInput) {
   const accounts = input.accounts.filter((a) => allowed(a.id));
   const monthTx = input.monthTransactions.filter((t) => allowed(t.accountId));
   const recentTx = input.recentTransactions.filter((t) => allowed(t.accountId));
+
+  const receipts = (input.incomeReceipts ?? []).filter((r) => allowed(r.accountId));
+  const incomeThisMonth = receipts.filter((r) => r.date >= monthStart && r.date < nextMonthStart).reduce((sum, r) => sum + r.amount, 0);
 
   const sectionName = new Map(input.sections.map((s) => [s.id, s.name]));
   const listingName = new Map(input.listings.map((l) => [l.id, l.name]));
@@ -185,8 +190,18 @@ export function buildSnapshot(input: SnapshotInput) {
       from: monthStart.toISOString().slice(0, 10),
       to: new Date(nextMonthStart.getTime() - 1).toISOString().slice(0, 10),
       spent: round(spent),
+      // Refunds and other money back into a section.
       received: round(received),
+      // Pay, fees and gifts that arrived (the income side, separate from refunds).
+      incomeReceived: round(incomeThisMonth),
     },
+    recentIncome: receipts.slice(0, 10).map((r) => ({
+      id: r.id,
+      date: r.date.toISOString().slice(0, 10),
+      amount: round(r.amount),
+      source: r.source,
+      account: accountName.get(r.accountId) ?? null,
+    })),
     recentTransactions: recentTx.map((t) => ({
       id: t.id,
       date: t.date.toISOString().slice(0, 10),
