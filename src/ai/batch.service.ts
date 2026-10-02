@@ -122,6 +122,8 @@ export class BatchService {
                 listingId: t.listingId,
                 amount: fromCents(t.cents),
                 description: t.description,
+                merchant: t.merchant,
+                raw: t.raw,
                 date: t.date,
                 source: 'ai',
               })),

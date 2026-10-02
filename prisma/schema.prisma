@@ -247,6 +247,9 @@ model Account {
   name    String
   type    AccountType
   balance Decimal
+  // How this account is named on a bank statement (the account number, or its
+  // last digits). Lets an AI tool tell which account a statement belongs to.
+  identifiers String[] @default([])
 
   transactions   Transaction[]
   sections       Section[]
@@ -305,6 +308,10 @@ model Transaction {
   // The AI import this came from, if any, so the whole import can be undone.
   batchId     String?
   batch       Batch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  // Who was paid, cleaned up ("P&S Kollupitiya"), and the line exactly as the
+  // bank printed it. Both optional; they only describe the transaction.
+  merchant    String?
+  raw         String?
 
   @@index([batchId])
 }

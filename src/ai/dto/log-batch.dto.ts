@@ -60,6 +60,18 @@ export class BatchRowDto {
   @IsOptional()
   @IsUUID()
   goalSectionId?: string;
+
+  // Transactions: who was paid, cleaned up, e.g. "P&S Kollupitiya".
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  merchant?: string;
+
+  // Transactions: the statement line exactly as the bank printed it.
+  @IsOptional()
+  @IsString()
+  @Length(1, 300)
+  raw?: string;
 }
 
 export class LogBatchDto {

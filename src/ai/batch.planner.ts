@@ -24,6 +24,8 @@ export interface PlannedTransaction {
   listingId: string | null;
   cents: number;
   description: string;
+  merchant: string | null;
+  raw: string | null;
   date: Date;
 }
 
@@ -189,6 +191,8 @@ export function planBatch(rows: BatchRowDto[], ctx: PlannerContext): BatchPlan {
       listingId: row.listingId ?? null,
       cents,
       description,
+      merchant: row.merchant?.trim() || null,
+      raw: row.raw?.trim() || null,
       date,
     });
     plan.accountDeltas.set(row.accountId, (plan.accountDeltas.get(row.accountId) ?? 0) + cents);

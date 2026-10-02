@@ -4,7 +4,8 @@ import { SectionsService } from '../sections/sections.service.js';
 import type { AuthContext } from '../auth/auth-context.js';
 import { buildSnapshot, type Snapshot } from './snapshot.builder.js';
 
-const RECENT_COUNT = 15;
+// Enough history that an AI can copy how the user has filed similar spending before.
+const RECENT_COUNT = 40;
 const MONTH_LIMIT = 5000;
 
 const num = (d: { toString(): string } | null | undefined) => Number(d?.toString() ?? 0);
@@ -46,12 +47,19 @@ export class SnapshotService {
       accountId: t.accountId,
       sectionId: t.sectionId,
       listingId: t.listingId,
+      merchant: t.merchant,
     });
 
     return buildSnapshot({
       now,
       user,
-      accounts: accounts.map((a) => ({ id: a.id, name: a.name, type: a.type, balance: num(a.balance) })),
+      accounts: accounts.map((a) => ({
+        id: a.id,
+        name: a.name,
+        type: a.type,
+        balance: num(a.balance),
+        identifiers: a.identifiers,
+      })),
       incomes: incomes.map((i) => ({
         id: i.id,
         source: i.source,
