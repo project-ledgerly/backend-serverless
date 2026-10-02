@@ -20,16 +20,18 @@ model User {
   email        String? @unique
   passwordHash String?
 
-  plans             Plan[]
-  incomes           Income[]
-  accounts          Account[]
-  transactions      Transaction[]
-  rules             Rule[]
-  netWorthSnapshots NetWorthSnapshot[]
-  listings          Listing[]
-  transfers         Transfer[]
-  apiTokens         ApiToken[]
-  batches           Batch[]
+  plans              Plan[]
+  incomes            Income[]
+  accounts           Account[]
+  transactions       Transaction[]
+  rules              Rule[]
+  netWorthSnapshots  NetWorthSnapshot[]
+  listings           Listing[]
+  transfers          Transfer[]
+  apiTokens          ApiToken[]
+  batches            Batch[]
+  oauthCodes         OAuthCode[]
+  oauthRefreshTokens OAuthRefreshToken[]
 }
 
 model Plan {
@@ -141,7 +143,7 @@ model Goal {
   // What was already set aside toward this goal when it was created (its
   // account balance at the time). Counted in currentAmount but not as money
   // added this month, so monthly tracking starts from zero.
-  startingAmount      Decimal  @default(0)
+  startingAmount      Decimal   @default(0)
   // TARGET only — MONTHLY_RECURRING has no end date, it just repeats.
   targetDate          DateTime?
   // TARGET only — suggested (target - current) / monthsRemaining from
@@ -241,15 +243,15 @@ enum AccountType {
 }
 
 model Account {
-  id      String      @id @default(uuid())
-  userId  String
-  user    User        @relation(fields: [userId], references: [id])
-  name    String
-  type    AccountType
-  balance Decimal
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id])
+  name        String
+  type        AccountType
+  balance     Decimal
   // How this account is named on a bank statement (the account number, or its
   // last digits). Lets an AI tool tell which account a statement belongs to.
-  identifiers String[] @default([])
+  identifiers String[]    @default([])
 
   transactions   Transaction[]
   sections       Section[]
@@ -382,4 +384,56 @@ model Batch {
   transfers        Transfer[]
 
   @@index([userId, createdAt])
+}
+
+// An app that registered itself (RFC 7591) to sign users in and get an API
+// token on their behalf, e.g. ChatGPT or Claude connecting to the MCP server.
+// Public client: no secret, PKCE protects the code exchange.
+model OAuthClient {
+  id           String   @id @default(uuid())
+  clientId     String   @unique
+  name         String
+  redirectUris String[]
+  createdAt    DateTime @default(now())
+
+  codes         OAuthCode[]
+  refreshTokens OAuthRefreshToken[]
+}
+
+// One-time authorization code, kept as a hash and valid for a few minutes.
+model OAuthCode {
+  id            String      @id @default(uuid())
+  codeHash      String      @unique
+  clientId      String
+  client        OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  redirectUri   String
+  codeChallenge String
+  scopes        String[]
+  resource      String?
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime    @default(now())
+
+  @@index([expiresAt])
+}
+
+// Long-lived, rotated on every use. Each one points at the ApiToken it last
+// issued so the old access token can be revoked when it is replaced.
+model OAuthRefreshToken {
+  id         String      @id @default(uuid())
+  tokenHash  String      @unique
+  clientId   String
+  client     OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scopes     String[]
+  resource   String?
+  apiTokenId String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime    @default(now())
+
+  @@index([userId])
 }
