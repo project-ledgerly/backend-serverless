@@ -28,6 +28,7 @@ model User {
   netWorthSnapshots NetWorthSnapshot[]
   listings          Listing[]
   transfers         Transfer[]
+  apiTokens         ApiToken[]
 }
 
 model Plan {
@@ -314,4 +315,27 @@ model NetWorthSnapshot {
   totalAssets      Decimal
   totalLiabilities Decimal
   netWorth         Decimal
+}
+
+// A long-lived credential an AI tool (the MCP server) uses instead of the
+// user's login. Only the SHA-256 of the token is stored, so a database leak
+// does not leak usable tokens. It can only reach /ai/* routes, only with the
+// listed scopes, and optionally only the listed accounts.
+model ApiToken {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  // First characters of the token, safe to show so the user can tell tokens apart.
+  prefix     String
+  tokenHash  String    @unique
+  scopes     String[]
+  // Empty = every account of the user.
+  accountIds String[]
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+
+  @@index([userId])
 }

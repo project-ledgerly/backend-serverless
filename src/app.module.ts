@@ -10,6 +10,7 @@ import { TransactionsModule } from './transactions/transactions.module.js';
 import { AccountsModule } from './accounts/accounts.module.js';
 import { GoalsModule } from './goals/goals.module.js';
 import { UsersModule } from './users/users.module.js';
+import { AiModule } from './ai/ai.module.js';
 import { AuthModule } from './auth/auth.module.js';
 
 @Module({
@@ -24,6 +25,7 @@ import { AuthModule } from './auth/auth.module.js';
     GoalsModule,
     UsersModule,
     AuthModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [AppService],
