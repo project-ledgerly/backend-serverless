@@ -1,5 +1,7 @@
 // Turns plain rows into the snapshot an AI reads. Kept free of Prisma and Nest
-// so the month maths and the account limit are easy to test.
+// so the pay-period maths and the account limit are easy to test.
+
+import { payCycleContaining } from '../pay-cycle/pay-cycle.js';
 
 export interface SnapshotInput {
   now: Date;
@@ -73,15 +75,15 @@ export function buildSnapshot(input: SnapshotInput) {
   const limited = input.allowedAccountIds.length > 0;
   const allowed = (accountId: string) => !limited || input.allowedAccountIds.includes(accountId);
 
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  // The budget period follows the salary (28th to 27th), not the calendar month.
+  const cycle = payCycleContaining(now, input.incomes);
 
   const accounts = input.accounts.filter((a) => allowed(a.id));
-  const monthTx = input.monthTransactions.filter((t) => allowed(t.accountId));
+  const monthTx = input.monthTransactions.filter((t) => allowed(t.accountId) && t.date >= cycle.start && t.date < cycle.end);
   const recentTx = input.recentTransactions.filter((t) => allowed(t.accountId));
 
   const receipts = (input.incomeReceipts ?? []).filter((r) => allowed(r.accountId));
-  const incomeThisMonth = receipts.filter((r) => r.date >= monthStart && r.date < nextMonthStart).reduce((sum, r) => sum + r.amount, 0);
+  const incomeThisPeriod = receipts.filter((r) => r.date >= cycle.start && r.date < cycle.end).reduce((sum, r) => sum + r.amount, 0);
 
   const sectionName = new Map(input.sections.map((s) => [s.id, s.name]));
   const listingName = new Map(input.listings.map((l) => [l.id, l.name]));
@@ -104,7 +106,7 @@ export function buildSnapshot(input: SnapshotInput) {
 
   const balanceOf = new Map(input.accounts.map((a) => [a.id, a.balance]));
   const sections = input.sections.map((s) => {
-    const spentThisMonth = spentBySection.get(s.id) ?? 0;
+    const spentThisPeriod = spentBySection.get(s.id) ?? 0;
     const goal = input.goals.find((g) => g.sectionId === s.id);
     return {
       id: s.id,
@@ -117,8 +119,8 @@ export function buildSnapshot(input: SnapshotInput) {
       accountName: s.accountId ? (accountName.get(s.accountId) ?? null) : null,
       protected: s.protected,
       perPayday: round(s.projectedAmount),
-      spentThisMonth: round(spentThisMonth),
-      receivedThisMonth: round(receivedBySection.get(s.id) ?? 0),
+      spentThisPeriod: round(spentThisPeriod),
+      receivedThisPeriod: round(receivedBySection.get(s.id) ?? 0),
       bills: input.listings
         .filter((l) => l.sectionId === s.id)
         .map((l) => {
@@ -136,7 +138,7 @@ export function buildSnapshot(input: SnapshotInput) {
             name: l.name,
             amount: round(l.amount),
             dueDay: l.dueDay,
-            paidThisMonth: paid > 0,
+            paidThisPeriod: paid > 0,
             paidAmount: round(paid),
           };
         }),
@@ -186,14 +188,17 @@ export function buildSnapshot(input: SnapshotInput) {
         accountId: i.accountId,
       })),
     plan: input.plan ? { id: input.plan.id, name: input.plan.name, sections } : null,
-    thisMonth: {
-      from: monthStart.toISOString().slice(0, 10),
-      to: new Date(nextMonthStart.getTime() - 1).toISOString().slice(0, 10),
+    // The current budget period: from the last payday to the day before the next one.
+    // basis is "payday" when it follows a recurring income, "calendar" when there is none.
+    thisPeriod: {
+      basis: cycle.basis,
+      from: cycle.start.toISOString().slice(0, 10),
+      to: new Date(cycle.end.getTime() - 1).toISOString().slice(0, 10),
       spent: round(spent),
       // Refunds and other money back into a section.
       received: round(received),
       // Pay, fees and gifts that arrived (the income side, separate from refunds).
-      incomeReceived: round(incomeThisMonth),
+      incomeReceived: round(incomeThisPeriod),
     },
     recentIncome: receipts.slice(0, 10).map((r) => ({
       id: r.id,

@@ -40,13 +40,53 @@ function input(over: Partial<SnapshotInput> = {}): SnapshotInput {
   };
 }
 
+describe('budget period follows the salary', () => {
+  const salary28 = [
+    { id: 'i1', source: 'Salary', amount: 80000, recurring: true, frequency: 'MONTHLY', nextRunDate: new Date('2026-10-28T00:00:00Z'), accountId: 'a-main' },
+  ];
+
+  it('on Oct 3 with a 28th payday, the period is Sep 28 to Oct 27 and September spending still counts', () => {
+    const s = buildSnapshot(
+      input({
+        now: new Date('2026-10-03T08:00:00Z'),
+        incomes: salary28,
+        monthTransactions: [
+          { id: 'a', date: new Date('2026-09-29T00:00:00Z'), amount: -1000, description: 'Groceries', accountId: 'a-main', sectionId: 's-flex', listingId: null },
+          { id: 'b', date: new Date('2026-10-02T00:00:00Z'), amount: -500, description: 'Fuel', accountId: 'a-main', sectionId: 's-flex', listingId: null },
+          { id: 'old', date: new Date('2026-09-20T00:00:00Z'), amount: -9999, description: 'Last period', accountId: 'a-main', sectionId: 's-flex', listingId: null },
+        ],
+      }),
+    );
+    expect(s.thisPeriod).toMatchObject({ basis: 'payday', from: '2026-09-28', to: '2026-10-27', spent: 1500 });
+  });
+
+  it('counts income received in the period, not the calendar month', () => {
+    const s = buildSnapshot(
+      input({
+        now: new Date('2026-10-03T08:00:00Z'),
+        incomes: salary28,
+        incomeReceipts: [
+          { id: 'r1', date: new Date('2026-09-28T00:00:00Z'), amount: 80000, source: 'Salary', accountId: 'a-main' },
+          { id: 'r0', date: new Date('2026-08-28T00:00:00Z'), amount: 80000, source: 'Salary', accountId: 'a-main' },
+        ],
+      }),
+    );
+    expect(s.thisPeriod.incomeReceived).toBe(80000);
+  });
+
+  it('falls back to the calendar month when there is no recurring income', () => {
+    const s = buildSnapshot(input({ incomes: [] }));
+    expect(s.thisPeriod).toMatchObject({ basis: 'calendar', from: '2026-10-01', to: '2026-10-31' });
+  });
+});
+
 describe('buildSnapshot', () => {
   it('sums this month by section, and splits money out from money in', () => {
     const s = buildSnapshot(input());
-    expect(s.thisMonth).toEqual({ from: '2026-10-01', to: '2026-10-31', spent: 840, received: 25, incomeReceived: 0 });
+    expect(s.thisPeriod).toEqual({ basis: 'payday', from: '2026-09-30', to: '2026-10-30', spent: 840, received: 25, incomeReceived: 0 });
     const flex = s.plan!.sections.find((x) => x.name === 'Flexible')!;
-    expect(flex.spentThisMonth).toBe(40);
-    expect(flex.receivedThisMonth).toBe(25);
+    expect(flex.spentThisPeriod).toBe(40);
+    expect(flex.receivedThisPeriod).toBe(25);
     expect(flex.perPayday).toBe(900);
     expect(flex.allocation).toBe('remainder');
   });
@@ -63,14 +103,14 @@ describe('buildSnapshot', () => {
         ],
       }),
     ).plan!.sections.find((x) => x.name === 'Essentials')!.bills;
-    expect(named.find((b) => b.name === 'Internet')).toMatchObject({ paidThisMonth: true, paidAmount: 860 });
-    expect(named.find((b) => b.name === 'Rent')).toMatchObject({ paidThisMonth: false });
+    expect(named.find((b) => b.name === 'Internet')).toMatchObject({ paidThisPeriod: true, paidAmount: 860 });
+    expect(named.find((b) => b.name === 'Rent')).toMatchObject({ paidThisPeriod: false });
   });
 
   it('marks a bill paid only when an expense is linked to it', () => {
     const bills = buildSnapshot(input()).plan!.sections.find((x) => x.name === 'Essentials')!.bills;
-    expect(bills.find((b) => b.name === 'Rent')).toMatchObject({ paidThisMonth: true, paidAmount: 800, dueDay: 1 });
-    expect(bills.find((b) => b.name === 'Internet')).toMatchObject({ paidThisMonth: false, paidAmount: 0 });
+    expect(bills.find((b) => b.name === 'Rent')).toMatchObject({ paidThisPeriod: true, paidAmount: 800, dueDay: 1 });
+    expect(bills.find((b) => b.name === 'Internet')).toMatchObject({ paidThisPeriod: false, paidAmount: 0 });
   });
 
   it('reports goal progress, and a reserve as the account balance against its floor', () => {
@@ -100,7 +140,7 @@ describe('buildSnapshot', () => {
     expect(s.accounts.map((a) => a.name)).toEqual(['Rainy Day']);
     expect(s.limitedToAccounts).toEqual(['Rainy Day']);
     expect(s.incomes).toEqual([]);
-    expect(s.thisMonth.spent).toBe(0);
+    expect(s.thisPeriod.spent).toBe(0);
     expect(s.recentTransactions).toEqual([]);
   });
 
