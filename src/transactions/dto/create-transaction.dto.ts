@@ -27,6 +27,12 @@ export class CreateTransactionDto {
   @IsString()
   source!: string;
 
+  // The bill (Listing) this expense pays. It has to belong to the same
+  // section and user. Optional: most spends are not a listed bill.
+  @IsOptional()
+  @IsUUID()
+  listingId?: string;
+
   // Rule 4: spending from a `protected` section needs explicit confirmation.
   // Omitted/false against a protected section is rejected with 400, not
   // silently allowed or silently blocked.

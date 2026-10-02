@@ -45,9 +45,20 @@ export class TransactionsService {
     return [this.prisma.goal.update({ where: { id: goal.id }, data: { currentAmount: { increment: amount } } })];
   }
 
+  private async assertListingFits(listingId: string, sectionId: string, userId: string) {
+    const listing = await this.prisma.listing.findUnique({ where: { id: listingId } });
+    if (!listing || listing.userId !== userId) {
+      throw new BadRequestException(`listingId ${listingId} is not a bill of user ${userId}`);
+    }
+    if (listing.sectionId !== sectionId) {
+      throw new BadRequestException(`"${listing.name}" belongs to a different section than this expense`);
+    }
+  }
+
   async create(dto: CreateTransactionDto) {
     await this.assertAccountOwnedByUser(dto.accountId, dto.userId);
     const section = await this.loadSectionAndCheckProtection(dto.sectionId, dto.confirmed);
+    if (dto.listingId) await this.assertListingFits(dto.listingId, dto.sectionId, dto.userId);
 
     // amount is signed (see schema.prisma) — it's the source of truth the
     // account's balance (and the section's Goal, if any) are derived from.
@@ -61,6 +72,7 @@ export class TransactionsService {
           description: dto.description,
           date: new Date(dto.date),
           source: dto.source,
+          listingId: dto.listingId,
         },
       }),
       this.prisma.account.update({
@@ -119,6 +131,10 @@ export class TransactionsService {
     );
     if ('date' in definedUpdates) {
       definedUpdates.date = new Date(definedUpdates.date as string);
+    }
+    // Moving an expense to another section ends its link to the old section's bill.
+    if (dto.sectionId !== undefined && dto.sectionId !== transaction.sectionId) {
+      definedUpdates.listingId = null;
     }
 
     // Reverse the old amount off the old account (and old Goal, if any), then
