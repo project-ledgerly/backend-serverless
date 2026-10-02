@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, type Section } from '@prisma/client';
+import { Decimal } from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { validateSiblingGroup } from '../engine/validationService.js';
 import type { SectionInput } from '../engine/types.js';
@@ -40,22 +41,86 @@ export class SectionsService {
   }
 
   /**
-   * A SAVINGS-type Section may only link to a SAVINGS-type Account;
-   * everything else (Essential, Goal, Flexible) may only link to a
-   * SPENDING-type Account. Money for a savings goal shouldn't be able to
-   * point at the same pot as grocery spending.
+   * A SAVINGS-type Section may only link to a SAVINGS-type Account, and
+   * Essential/Flexible sections only to a SPENDING-type Account. A GOAL
+   * section may use either: a goal to save 50,000 lives in a savings account,
+   * while a goal to spend less this month lives in a spending account.
    */
   private async assertAccountTypeMatches(sectionType: Section['type'], accountId: string) {
     const account = await this.prisma.account.findUnique({ where: { id: accountId } });
     if (!account) {
       throw new BadRequestException(`accountId ${accountId} does not exist`);
     }
+    if (sectionType === 'GOAL') return;
     const expected = sectionType === 'SAVINGS' ? 'SAVINGS' : 'SPENDING';
     if (account.type !== expected) {
       throw new BadRequestException(
-        `A ${sectionType} section can only link to a ${expected} account, but ${accountId} is ${account.type}`,
+        `A ${sectionType} section can only link to a ${expected} account, but "${account.name}" is a ${account.type} account`,
       );
     }
+  }
+
+  // What a Section's percentage is a share OF — the sum of the user's
+  // recurring Income amounts, i.e. what actually lands per payday. One-off
+  // income isn't included: it doesn't repeat, so it isn't part of the
+  // steady baseline a percentage allocation is meant to divide up.
+  private async recurringIncomeTotal(userId: string): Promise<Decimal> {
+    const result = await this.prisma.income.aggregate({
+      where: { userId, recurring: true },
+      _sum: { amount: true },
+    });
+    return new Decimal(result._sum.amount?.toString() ?? '0');
+  }
+
+  /**
+   * Computes every section's `projectedAmount` for a whole plan in one pass
+   * — percentage applied to its parent's amount (the plan's income total
+   * for top-level sections, or the parent section's own amount for
+   * children), and the REMAINDER section in a group getting whatever's left
+   * after its PERCENTAGE siblings instead of its own (placeholder) percentage.
+   * A single section can't be decorated in isolation — a REMAINDER
+   * section's amount only means anything next to its siblings.
+   */
+  private computeProjectedAmounts(sections: Section[], incomeTotal: Decimal): Map<string, string> {
+    const byParent = new Map<string | null, Section[]>();
+    for (const s of sections) {
+      const key = s.parentId;
+      const group = byParent.get(key);
+      if (group) group.push(s);
+      else byParent.set(key, [s]);
+    }
+
+    const amounts = new Map<string, string>();
+
+    const resolveGroup = (parentId: string | null, parentAmount: Decimal) => {
+      const siblings = byParent.get(parentId) ?? [];
+      let remainderSection: Section | undefined;
+      let percentageSum = new Decimal(0);
+
+      for (const s of siblings) {
+        if (s.allocationMode === 'REMAINDER') {
+          remainderSection = s;
+          continue;
+        }
+        const amount = parentAmount.times(s.percentage.toString()).dividedBy(100);
+        amounts.set(s.id, amount.toFixed(2));
+        percentageSum = percentageSum.plus(amount);
+        resolveGroup(s.id, amount);
+      }
+
+      if (remainderSection) {
+        const amount = parentAmount.minus(percentageSum);
+        amounts.set(remainderSection.id, amount.toFixed(2));
+        resolveGroup(remainderSection.id, amount);
+      }
+    };
+
+    resolveGroup(null, incomeTotal);
+    return amounts;
+  }
+
+  private withProjectedAmounts<T extends { id: string }>(sections: T[], amounts: Map<string, string>): (T & { projectedAmount: string })[] {
+    return sections.map((s) => ({ ...s, projectedAmount: amounts.get(s.id) ?? '0.00' }));
   }
 
   async create(planId: string, dto: CreateSectionDto) {
@@ -79,23 +144,32 @@ export class SectionsService {
     this.assertSiblingGroupValid([...siblings.map(toSectionInput), pending]);
 
     try {
-      return await this.prisma.section.create({ data: { ...dto, planId } });
+      const section = await this.prisma.section.create({ data: { ...dto, planId } });
+      return (await this.decoratePlanSections(planId)).find((s) => s.id === section.id)!;
     } catch (error) {
       throw this.translateWriteError(error);
     }
   }
 
+  /** Fetches every Section of a plan with projectedAmount computed together. */
+  private async decoratePlanSections(planId: string) {
+    const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: planId } });
+    const [sections, incomeTotal] = await Promise.all([
+      this.prisma.section.findMany({ where: { planId }, orderBy: { priorityOrder: 'asc' } }),
+      this.recurringIncomeTotal(plan.userId),
+    ]);
+    const amounts = this.computeProjectedAmounts(sections, incomeTotal);
+    return this.withProjectedAmounts(sections, amounts);
+  }
+
   findAllForPlan(planId: string) {
-    return this.prisma.section.findMany({
-      where: { planId },
-      orderBy: { priorityOrder: 'asc' },
-    });
+    return this.decoratePlanSections(planId);
   }
 
   async findOne(id: string) {
     const section = await this.prisma.section.findUnique({ where: { id } });
     if (!section) throw new NotFoundException(`Section ${id} not found`);
-    return section;
+    return (await this.decoratePlanSections(section.planId)).find((s) => s.id === id)!;
   }
 
   async update(id: string, dto: UpdateSectionDto) {
@@ -125,7 +199,8 @@ export class SectionsService {
     this.assertSiblingGroupValid([...newSiblings.map(toSectionInput), merged]);
 
     try {
-      return await this.prisma.section.update({ where: { id }, data: dto });
+      await this.prisma.section.update({ where: { id }, data: dto });
+      return (await this.decoratePlanSections(section.planId)).find((s) => s.id === id)!;
     } catch (error) {
       throw this.translateWriteError(error);
     }
@@ -134,7 +209,12 @@ export class SectionsService {
   async remove(id: string) {
     await this.findOne(id);
     try {
-      await this.prisma.section.delete({ where: { id } });
+      // A section's listings go with it (they have no meaning without it);
+      // one transaction so a section that can't be deleted keeps its listings.
+      await this.prisma.$transaction([
+        this.prisma.listing.deleteMany({ where: { sectionId: id } }),
+        this.prisma.section.delete({ where: { id } }),
+      ]);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
         throw new ConflictException('Section still has a goal, transactions, rules, or allocations attached');

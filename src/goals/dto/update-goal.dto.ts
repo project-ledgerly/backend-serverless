@@ -13,4 +13,9 @@ export class UpdateGoalDto {
   @IsOptional()
   @IsBoolean()
   autoCalculated?: boolean;
+
+  // Changing this shifts currentAmount by the difference.
+  @IsOptional()
+  @IsNumberString()
+  startingAmount?: string;
 }

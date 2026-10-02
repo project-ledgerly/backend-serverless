@@ -26,6 +26,10 @@ model User {
   transactions      Transaction[]
   rules             Rule[]
   netWorthSnapshots NetWorthSnapshot[]
+  listings          Listing[]
+  transfers         Transfer[]
+  apiTokens         ApiToken[]
+  batches           Batch[]
 }
 
 model Plan {
@@ -73,14 +77,40 @@ model Section {
   accountId String?
   account   Account? @relation(fields: [accountId], references: [id])
 
-  goal        Goal?
-  transactions Transaction[]
-  rules       Rule[]
-  allocations SectionAllocation[]
+  goal          Goal?
+  goalTransfers Transfer[]
+  transactions  Transaction[]
+  rules         Rule[]
+  allocations   SectionAllocation[]
+  listings      Listing[]
 
   // Rule 3 (exactly one REMAINDER section per sibling group) is enforced by a
   // partial unique index added by hand in the init migration — Prisma's
   // schema language can't express a filtered/expression index.
+}
+
+// A line item a user plans to spend out of a Section's allocation (e.g.
+// "Netflix" under a Flexible/Essentials section) — distinct from Transaction,
+// which is an actual logged/scanned spend. Listings are the onboarding
+// wizard's planning layer; they don't move money or affect Account.balance.
+// Scoped by both sectionId and userId (not derived through the Section/Plan
+// chain) so an ownership check is a single indexed lookup, not a join.
+model Listing {
+  id        String   @id @default(uuid())
+  sectionId String
+  section   Section  @relation(fields: [sectionId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  amount    Decimal
+  // Day of the month (1-31) this bill is due. Null = no fixed due date.
+  // Months shorter than the day clamp to their last day.
+  dueDay    Int?
+  createdAt DateTime @default(now())
+
+  // Expenses recorded against this bill. Deleting the bill keeps them (the
+  // spend happened), they just lose the link.
+  transactions Transaction[]
 }
 
 enum GoalMode {
@@ -91,29 +121,37 @@ enum GoalMode {
   // currentAmount tracks only the active calendar month; GoalSchedulerService
   // rolls it into a GoalMonthSnapshot at month boundary and resets to 0.
   MONTHLY_RECURRING
+  // Keep at least targetAmount in the account the goal's section is linked
+  // to (a reserve / floor). There is nothing to accumulate: progress is the
+  // live account balance against targetAmount, so currentAmount is unused.
+  RESERVE
 }
 
 model Goal {
-  id            String   @id @default(uuid())
-  sectionId     String   @unique
-  section       Section  @relation(fields: [sectionId], references: [id])
-  mode          GoalMode @default(TARGET)
-  targetAmount  Decimal
+  id                  String    @id @default(uuid())
+  sectionId           String    @unique
+  section             Section   @relation(fields: [sectionId], references: [id])
+  mode                GoalMode  @default(TARGET)
+  targetAmount        Decimal
   // Derived, not hand-set — TransactionsService adjusts this the same way it
   // adjusts Account.balance, on every Transaction tagged to this Goal's
   // section. A contribution (allocation credit) raises it, a withdrawal
   // (a logged or scanned spend) lowers it — same signed-amount convention.
-  currentAmount Decimal
+  currentAmount       Decimal
+  // What was already set aside toward this goal when it was created (its
+  // account balance at the time). Counted in currentAmount but not as money
+  // added this month, so monthly tracking starts from zero.
+  startingAmount      Decimal  @default(0)
   // TARGET only — MONTHLY_RECURRING has no end date, it just repeats.
-  targetDate    DateTime?
+  targetDate          DateTime?
   // TARGET only — suggested (target - current) / monthsRemaining from
   // sinkingFundCalculator; MONTHLY_RECURRING has no separate figure, its
   // targetAmount already IS the monthly commitment.
   monthlyContribution Decimal?
-  autoCalculated      Boolean  @default(true)
+  autoCalculated      Boolean   @default(true)
   // MONTHLY_RECURRING only — start of the calendar month currentAmount is
   // currently tracking. Null for TARGET goals.
-  currentPeriodStart DateTime?
+  currentPeriodStart  DateTime?
 
   monthSnapshots GoalMonthSnapshot[]
 }
@@ -133,8 +171,15 @@ model GoalMonthSnapshot {
   createdAt    DateTime @default(now())
 }
 
+enum IncomeFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  YEARLY
+}
+
 // A definition, not a running total: one-off income is a single event,
-// recurring income is the template a monthly cycle repeats. Either way the
+// recurring income is the template a cycle repeats. Either way the
 // actual money-received history lives in IncomeReceipt, one row per credit.
 model Income {
   id        String   @id @default(uuid())
@@ -145,11 +190,14 @@ model Income {
   date      DateTime
   recurring Boolean  @default(false)
 
+  // Recurring only — how often nextRunDate advances. Null for one-off income.
+  frequency IncomeFrequency?
+
   // Which Account gets credited. Recurring only: the next due date — catch-up
   // is lazy, nothing runs on a schedule; a request
-  // (IncomeSchedulerService.catchUp) walks nextRunDate forward one month at
-  // a time for every cycle that's already due, crediting the Account and
-  // logging a receipt each time, until it's not in the past anymore.
+  // (IncomeSchedulerService.catchUp) walks nextRunDate forward by `frequency`
+  // for every cycle that's already due, crediting the Account and logging a
+  // receipt each time, until it's not in the past anymore.
   accountId   String
   account     Account   @relation(fields: [accountId], references: [id])
   nextRunDate DateTime?
@@ -199,11 +247,42 @@ model Account {
   name    String
   type    AccountType
   balance Decimal
+  // How this account is named on a bank statement (the account number, or its
+  // last digits). Lets an AI tool tell which account a statement belongs to.
+  identifiers String[] @default([])
 
-  transactions Transaction[]
-  sections     Section[]
-  incomes      Income[]
+  transactions   Transaction[]
+  sections       Section[]
+  incomes        Income[]
   incomeReceipts IncomeReceipt[]
+  transfersOut   Transfer[]      @relation("TransferFrom")
+  transfersIn    Transfer[]      @relation("TransferTo")
+}
+
+/// Money moved between two of a user's own accounts (salary -> savings).
+/// Not a spend, so it has no Section and never touches a budget; it only
+/// shifts balance from one Account to the other. Additive.
+model Transfer {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  fromAccountId String
+  fromAccount   Account  @relation("TransferFrom", fields: [fromAccountId], references: [id])
+  toAccountId   String
+  toAccount     Account  @relation("TransferTo", fields: [toAccountId], references: [id])
+  amount        Decimal
+  note          String?
+  // The goal section this transfer pays into (salary -> savings for a goal).
+  // Raises that Goal's currentAmount by the same amount.
+  goalSectionId String?
+  goalSection   Section? @relation(fields: [goalSectionId], references: [id], onDelete: SetNull)
+  date          DateTime
+  createdAt     DateTime @default(now())
+  // The AI import this came from, if any, so the whole import can be undone.
+  batchId       String?
+  batch         Batch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@index([batchId])
 }
 
 model Transaction {
@@ -222,6 +301,19 @@ model Transaction {
   description String
   date        DateTime
   source      String
+  // The bill (Listing) this expense paid, if any. Lets a bill be marked paid
+  // by an actual link instead of guessing from the description.
+  listingId   String?
+  listing     Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  // The AI import this came from, if any, so the whole import can be undone.
+  batchId     String?
+  batch       Batch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  // Who was paid, cleaned up ("P&S Kollupitiya"), and the line exactly as the
+  // bank printed it. Both optional; they only describe the transaction.
+  merchant    String?
+  raw         String?
+
+  @@index([batchId])
 }
 
 model Rule {
@@ -241,4 +333,53 @@ model NetWorthSnapshot {
   totalAssets      Decimal
   totalLiabilities Decimal
   netWorth         Decimal
+}
+
+// A long-lived credential an AI tool (the MCP server) uses instead of the
+// user's login. Only the SHA-256 of the token is stored, so a database leak
+// does not leak usable tokens. It can only reach /ai/* routes, only with the
+// listed scopes, and optionally only the listed accounts.
+model ApiToken {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  // First characters of the token, safe to show so the user can tell tokens apart.
+  prefix     String
+  tokenHash  String    @unique
+  scopes     String[]
+  // Empty = every account of the user.
+  accountIds String[]
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+
+  @@index([userId])
+}
+
+// One AI import (a statement logged in bulk). Everything it created points back
+// here through batchId, which is what lets the whole import be undone at once.
+model Batch {
+  id               String        @id @default(uuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // The API token that made it, kept as plain text so it outlives the token.
+  tokenId          String?
+  summary          String?
+  transactionCount Int           @default(0)
+  transferCount    Int           @default(0)
+  createdAt        DateTime      @default(now())
+  // import | delete | update | reconcile. What the batch did.
+  kind             String        @default("import")
+  // What undo needs to put things back: the rows as they were before a delete
+  // or an edit, or the balance change of a reconcile. Null for an import,
+  // which is undone by deleting the rows that point back at it.
+  undoData         Json?
+  // Set when the batch was undone.
+  undoneAt         DateTime?
+  transactions     Transaction[]
+  transfers        Transfer[]
+
+  @@index([userId, createdAt])
 }

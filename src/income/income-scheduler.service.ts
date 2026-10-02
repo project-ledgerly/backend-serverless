@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { IncomeFrequency } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 export interface CatchUpResult {
@@ -35,7 +36,7 @@ export class IncomeSchedulerService {
       const now = new Date();
       while (cursor <= now) {
         dueDates.push(cursor);
-        cursor = addOneMonth(cursor);
+        cursor = advance(cursor, income.frequency);
       }
       if (dueDates.length === 0) continue;
 
@@ -69,8 +70,24 @@ export class IncomeSchedulerService {
   }
 }
 
-function addOneMonth(date: Date): Date {
+// Null frequency (an old row predating this field, or a bug elsewhere) falls
+// back to monthly — the previous hardcoded behavior — rather than looping
+// forever on an un-advancing cursor.
+function advance(date: Date, frequency: IncomeFrequency | null): Date {
   const next = new Date(date);
-  next.setMonth(next.getMonth() + 1);
-  return next;
+  switch (frequency) {
+    case 'WEEKLY':
+      next.setDate(next.getDate() + 7);
+      return next;
+    case 'BIWEEKLY':
+      next.setDate(next.getDate() + 14);
+      return next;
+    case 'YEARLY':
+      next.setFullYear(next.getFullYear() + 1);
+      return next;
+    case 'MONTHLY':
+    default:
+      next.setMonth(next.getMonth() + 1);
+      return next;
+  }
 }

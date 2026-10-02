@@ -39,14 +39,26 @@ export class TransactionsService {
    * same signed-amount convention as Account.balance — a savings
    * withdrawal deducts from what was already committed, per spec.
    */
-  private goalDeltaOp(goalId: string | undefined, amount: Prisma.Decimal.Value) {
-    if (!goalId) return [];
-    return [this.prisma.goal.update({ where: { id: goalId }, data: { currentAmount: { increment: amount } } })];
+  private goalDeltaOp(goal: { id: string; mode: string } | null | undefined, amount: Prisma.Decimal.Value) {
+    // A RESERVE goal watches an account balance; it has no running total.
+    if (!goal || goal.mode === 'RESERVE') return [];
+    return [this.prisma.goal.update({ where: { id: goal.id }, data: { currentAmount: { increment: amount } } })];
+  }
+
+  private async assertListingFits(listingId: string, sectionId: string, userId: string) {
+    const listing = await this.prisma.listing.findUnique({ where: { id: listingId } });
+    if (!listing || listing.userId !== userId) {
+      throw new BadRequestException(`listingId ${listingId} is not a bill of user ${userId}`);
+    }
+    if (listing.sectionId !== sectionId) {
+      throw new BadRequestException(`"${listing.name}" belongs to a different section than this expense`);
+    }
   }
 
   async create(dto: CreateTransactionDto) {
     await this.assertAccountOwnedByUser(dto.accountId, dto.userId);
     const section = await this.loadSectionAndCheckProtection(dto.sectionId, dto.confirmed);
+    if (dto.listingId) await this.assertListingFits(dto.listingId, dto.sectionId, dto.userId);
 
     // amount is signed (see schema.prisma) — it's the source of truth the
     // account's balance (and the section's Goal, if any) are derived from.
@@ -60,13 +72,14 @@ export class TransactionsService {
           description: dto.description,
           date: new Date(dto.date),
           source: dto.source,
+          listingId: dto.listingId,
         },
       }),
       this.prisma.account.update({
         where: { id: dto.accountId },
         data: { balance: { increment: dto.amount } },
       }),
-      ...this.goalDeltaOp(section.goal?.id, dto.amount),
+      ...this.goalDeltaOp(section.goal, dto.amount),
     ]);
     return transaction;
   }
@@ -79,8 +92,19 @@ export class TransactionsService {
     return this.prisma.transaction.findMany({ where: { sectionId }, orderBy: { date: 'desc' } });
   }
 
-  findAllForUser(userId: string) {
-    return this.prisma.transaction.findMany({ where: { userId }, orderBy: { date: 'desc' }, take: 50 });
+  /**
+   * Newest first. `from` (inclusive) bounds the window — the Dashboard's
+   * monthly spending chart asks for ~6 months back — and `limit` caps the
+   * row count (default 50, max 1000) so an unbounded history never ships
+   * in one response.
+   */
+  findAllForUser(userId: string, opts: { from?: Date; limit?: number } = {}) {
+    const take = Math.min(Math.max(opts.limit ?? 50, 1), 1000);
+    return this.prisma.transaction.findMany({
+      where: { userId, ...(opts.from ? { date: { gte: opts.from } } : {}) },
+      orderBy: { date: 'desc' },
+      take,
+    });
   }
 
   async findOne(id: string) {
@@ -108,6 +132,10 @@ export class TransactionsService {
     if ('date' in definedUpdates) {
       definedUpdates.date = new Date(definedUpdates.date as string);
     }
+    // Moving an expense to another section ends its link to the old section's bill.
+    if (dto.sectionId !== undefined && dto.sectionId !== transaction.sectionId) {
+      definedUpdates.listingId = null;
+    }
 
     // Reverse the old amount off the old account (and old Goal, if any), then
     // apply the new amount to the (possibly different) new account/Goal —
@@ -124,8 +152,8 @@ export class TransactionsService {
         where: { id: newAccountId },
         data: { balance: { increment: newAmount } },
       }),
-      ...this.goalDeltaOp(oldSection?.goal?.id, transaction.amount.negated()),
-      ...this.goalDeltaOp(newSection?.goal?.id, newAmount),
+      ...this.goalDeltaOp(oldSection?.goal, transaction.amount.negated()),
+      ...this.goalDeltaOp(newSection?.goal, newAmount),
       this.prisma.transaction.update({ where: { id }, data: definedUpdates }),
     ];
     const results = await this.prisma.$transaction(ops);
@@ -140,7 +168,7 @@ export class TransactionsService {
         where: { id: transaction.accountId },
         data: { balance: { decrement: transaction.amount } },
       }),
-      ...this.goalDeltaOp(section?.goal?.id, transaction.amount.negated()),
+      ...this.goalDeltaOp(section?.goal, transaction.amount.negated()),
       this.prisma.transaction.delete({ where: { id } }),
     ]);
   }

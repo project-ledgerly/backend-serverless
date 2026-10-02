@@ -6,5 +6,6 @@ import { IncomeSchedulerService } from './income-scheduler.service.js';
 @Module({
   controllers: [IncomeController],
   providers: [IncomeService, IncomeSchedulerService],
+  exports: [IncomeService],
 })
 export class IncomeModule {}

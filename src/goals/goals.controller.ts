@@ -24,6 +24,14 @@ export class GoalsController {
     return this.goalSchedulerService.catchUp(userId);
   }
 
+  @Get('goals')
+  findAll(@Query('userId') userId: string) {
+    if (!userId) {
+      throw new BadRequestException('userId query param is required');
+    }
+    return this.goalsService.findAllForUser(userId);
+  }
+
   @Post('sections/:sectionId/goal')
   create(@Param('sectionId') sectionId: string, @Body() dto: CreateGoalDto) {
     return this.goalsService.create(sectionId, dto);
