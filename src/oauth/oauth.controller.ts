@@ -13,7 +13,7 @@ const PAGE_HEADERS = {
   'Cache-Control': 'no-store',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
-  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:; frame-ancestors 'none'; base-uri 'none'",
 } as const;
 
 function clientIp(req: Request): string {
