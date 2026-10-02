@@ -6,5 +6,6 @@ import { GoalSchedulerService } from './goal-scheduler.service.js';
 @Module({
   controllers: [GoalsController],
   providers: [GoalsService, GoalSchedulerService],
+  exports: [GoalsService],
 })
 export class GoalsModule {}
