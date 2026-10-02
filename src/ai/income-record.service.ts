@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { Batch } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { movesBalance } from '../accounts/balance-rule.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { IncomeService } from '../income/income.service.js';
 import type { AuthContext } from '../auth/auth-context.js';
@@ -43,6 +44,11 @@ export class IncomeRecordService {
     const dup = existing.find((r) => toCents(Number(r.amount)) === cents && r.income.source.trim().toLowerCase() === dto.source.trim().toLowerCase());
     if (dup) return { duplicate: true, batchId: null as string | null, message: 'This income is already recorded; nothing was added.' };
 
+    // Arrived before the balance was stated: it is in that balance already, so it is only a record.
+    const target = await this.prisma.account.findFirst({ where: { id: dto.accountId, userId: auth.userId } });
+    if (!target) throw new BadRequestException('accountId is not one of your accounts');
+    const moved = movesBalance(target.balanceAsOf, date);
+
     const income = await this.incomes.create({
       userId: auth.userId,
       amount: fromCents(cents),
@@ -60,7 +66,7 @@ export class IncomeRecordService {
         tokenId: auth.tokenId,
         kind: 'income',
         summary: dto.summary ?? `Recorded income: ${dto.source.trim()} ${fromCents(cents)}`,
-        undoData: { incomeId: income.id, accountId: dto.accountId, cents },
+        undoData: { incomeId: income.id, accountId: dto.accountId, cents, moved },
       },
     });
     const account = await this.prisma.account.findUniqueOrThrow({ where: { id: dto.accountId } });
@@ -69,19 +75,22 @@ export class IncomeRecordService {
       batchId,
       incomeId: income.id,
       account: account.name,
-      added: cents / 100,
+      added: moved ? cents / 100 : 0,
+      ...(moved ? {} : { note: 'Dated before the balance was last stated, so it is recorded but the balance is unchanged.' }),
       balanceNow: Number(account.balance),
     };
   }
 
   async undo(batch: Batch) {
-    const data = batch.undoData as { incomeId: string; accountId: string; cents: number };
+    const data = batch.undoData as { incomeId: string; accountId: string; cents: number; moved?: boolean };
     await this.prisma.$transaction([
       this.prisma.incomeReceipt.deleteMany({ where: { incomeId: data.incomeId } }),
       this.prisma.income.deleteMany({ where: { id: data.incomeId } }),
-      this.prisma.account.update({ where: { id: data.accountId }, data: { balance: { decrement: fromCents(data.cents) } } }),
+      ...(data.moved === false
+        ? []
+        : [this.prisma.account.update({ where: { id: data.accountId }, data: { balance: { decrement: fromCents(data.cents) } } })]),
       this.prisma.batch.update({ where: { id: batch.id }, data: { undoneAt: new Date() } }),
     ]);
-    return { batchId: batch.id, alreadyUndone: false, kind: batch.kind, restored: { accountBalanceChange: -data.cents / 100 } };
+    return { batchId: batch.id, alreadyUndone: false, kind: batch.kind, restored: { accountBalanceChange: data.moved === false ? 0 : -data.cents / 100 } };
   }
 }

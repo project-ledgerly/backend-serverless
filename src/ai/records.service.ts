@@ -1,3 +1,4 @@
+import { movesBalance, today } from '../accounts/balance-rule.js';
 import {
   BadRequestException,
   ConflictException,
@@ -143,7 +144,13 @@ export class RecordsService {
 
     const goals = await this.goalsBySection(rows.map((r) => r.sectionId));
     const effects = new Effects();
-    for (const r of rows) effects.transaction({ accountId: r.accountId, cents: toCents(num(r.amount)), goal: goals.get(r.sectionId) ?? null }, -1);
+    const asOf = await this.asOfMap(auth.userId);
+    for (const r of rows) {
+      effects.transaction(
+        { accountId: r.accountId, cents: toCents(num(r.amount)), goal: goals.get(r.sectionId) ?? null, movesBalance: movesBalance(asOf.get(r.accountId), r.date) },
+        -1,
+      );
+    }
 
     const result = {
       dryRun: Boolean(dto.dryRun),
@@ -183,9 +190,17 @@ export class RecordsService {
 
     const goalIds = await this.goalIdsBySection(rows.map((r) => r.goalSectionId).filter((x): x is string => !!x));
     const effects = new Effects();
+    const asOf = await this.asOfMap(auth.userId);
     for (const r of rows) {
       effects.transfer(
-        { fromAccountId: r.fromAccountId, toAccountId: r.toAccountId, cents: toCents(num(r.amount)), goalId: r.goalSectionId ? (goalIds.get(r.goalSectionId) ?? null) : null },
+        {
+          fromAccountId: r.fromAccountId,
+          toAccountId: r.toAccountId,
+          cents: toCents(num(r.amount)),
+          goalId: r.goalSectionId ? (goalIds.get(r.goalSectionId) ?? null) : null,
+          movesFrom: movesBalance(asOf.get(r.fromAccountId), r.date),
+          movesTo: movesBalance(asOf.get(r.toAccountId), r.date),
+        },
         -1,
       );
     }
@@ -226,11 +241,12 @@ export class RecordsService {
     const byId = new Map(before.map((r) => [r.id, r]));
 
     const [accounts, sections, listings] = await Promise.all([
-      this.prisma.account.findMany({ where: { userId: auth.userId }, select: { id: true, name: true } }),
+      this.prisma.account.findMany({ where: { userId: auth.userId }, select: { id: true, name: true, balanceAsOf: true } }),
       this.prisma.section.findMany({ where: { plan: { userId: auth.userId } }, select: { id: true, name: true, goal: { select: { id: true, mode: true } } } }),
       this.prisma.listing.findMany({ where: { userId: auth.userId }, select: { id: true, name: true, sectionId: true } }),
     ]);
     const accountIds = new Set(accounts.map((a) => a.id));
+    const asOf = new Map(accounts.map((a) => [a.id, a.balanceAsOf]));
     const sectionById = new Map(sections.map((s) => [s.id, s]));
     const listingById = new Map(listings.map((l) => [l.id, l]));
     const latest = Date.now() + MAX_FUTURE_DAYS * 86_400_000;
@@ -272,8 +288,8 @@ export class RecordsService {
       if (!description) return fail('description cannot be empty');
 
       const oldGoal = sectionById.get(old.sectionId)?.goal ?? null;
-      effects.transaction({ accountId: old.accountId, cents: toCents(num(old.amount)), goal: oldGoal }, -1);
-      effects.transaction({ accountId, cents, goal: section.goal }, 1);
+      effects.transaction({ accountId: old.accountId, cents: toCents(num(old.amount)), goal: oldGoal, movesBalance: movesBalance(asOf.get(old.accountId), old.date) }, -1);
+      effects.transaction({ accountId, cents, goal: section.goal, movesBalance: movesBalance(asOf.get(accountId), date) }, 1);
 
       updates.push(
         this.prisma.transaction.update({
@@ -347,10 +363,11 @@ export class RecordsService {
           tokenId: auth.tokenId,
           kind: 'reconcile',
           summary: dto.summary ?? `Set ${account.name} to ${target / 100}`,
-          undoData: { accountId, deltaCents: delta },
+          undoData: { accountId, deltaCents: delta, previousAsOf: account.balanceAsOf ? account.balanceAsOf.toISOString() : null },
         },
       }),
-      this.prisma.account.update({ where: { id: accountId }, data: { balance: { increment: fromCents(delta) } } }),
+      // The new figure is true as of today: older entries are inside it from now on.
+      this.prisma.account.update({ where: { id: accountId }, data: { balance: { increment: fromCents(delta) }, balanceAsOf: today() } }),
     ]);
     return { ...result, batchId };
   }
@@ -364,12 +381,16 @@ export class RecordsService {
       transfers?: FrozenTransfer[];
       accountId?: string;
       deltaCents?: number;
+      previousAsOf?: string | null;
     };
     const done = (extra: Record<string, unknown>) => ({ batchId: batch.id, alreadyUndone: false, kind: batch.kind, ...extra });
 
     if (batch.kind === 'reconcile') {
       await this.prisma.$transaction([
-        this.prisma.account.update({ where: { id: data.accountId! }, data: { balance: { decrement: fromCents(data.deltaCents ?? 0) } } }),
+        this.prisma.account.update({
+          where: { id: data.accountId! },
+          data: { balance: { decrement: fromCents(data.deltaCents ?? 0) }, balanceAsOf: data.previousAsOf ? new Date(data.previousAsOf) : null },
+        }),
         this.prisma.batch.update({ where: { id: batch.id }, data: { undoneAt: new Date() } }),
       ]);
       return done({ restored: { accountBalanceChange: -(data.deltaCents ?? 0) / 100 } });
@@ -380,6 +401,7 @@ export class RecordsService {
     const goals = await this.goalsBySection(frozenTx.map((t) => t.sectionId));
     const goalIds = await this.goalIdsBySection(frozenTr.map((t) => t.goalSectionId).filter((x): x is string => !!x));
     const effects = new Effects();
+    const asOf = await this.asOfMap(batch.userId);
 
     if (batch.kind === 'delete') {
       const ok = await this.referencesStillExist(batch.userId, frozenTx, frozenTr);
@@ -389,9 +411,24 @@ export class RecordsService {
       const bills = new Set(
         (await this.prisma.listing.findMany({ where: { id: { in: billIds }, userId: batch.userId }, select: { id: true } })).map((l) => l.id),
       );
-      for (const t of frozenTx) effects.transaction({ accountId: t.accountId, cents: toCents(Number(t.amount)), goal: goals.get(t.sectionId) ?? null }, 1);
+      for (const t of frozenTx) {
+        effects.transaction(
+          { accountId: t.accountId, cents: toCents(Number(t.amount)), goal: goals.get(t.sectionId) ?? null, movesBalance: movesBalance(asOf.get(t.accountId), new Date(t.date)) },
+          1,
+        );
+      }
       for (const t of frozenTr) {
-        effects.transfer({ fromAccountId: t.fromAccountId, toAccountId: t.toAccountId, cents: toCents(Number(t.amount)), goalId: t.goalSectionId ? (goalIds.get(t.goalSectionId) ?? null) : null }, 1);
+        effects.transfer(
+          {
+            fromAccountId: t.fromAccountId,
+            toAccountId: t.toAccountId,
+            cents: toCents(Number(t.amount)),
+            goalId: t.goalSectionId ? (goalIds.get(t.goalSectionId) ?? null) : null,
+            movesFrom: movesBalance(asOf.get(t.fromAccountId), new Date(t.date)),
+            movesTo: movesBalance(asOf.get(t.toAccountId), new Date(t.date)),
+          },
+          1,
+        );
       }
       await this.prisma.$transaction([
         ...(frozenTx.length
@@ -418,8 +455,8 @@ export class RecordsService {
       for (const t of frozenTx) {
         const cur = now.get(t.id);
         if (!cur) continue; // deleted since; deleting it already reversed its effect
-        effects.transaction({ accountId: cur.accountId, cents: toCents(num(cur.amount)), goal: currentGoals.get(cur.sectionId) ?? null }, -1);
-        effects.transaction({ accountId: t.accountId, cents: toCents(Number(t.amount)), goal: goals.get(t.sectionId) ?? null }, 1);
+        effects.transaction({ accountId: cur.accountId, cents: toCents(num(cur.amount)), goal: currentGoals.get(cur.sectionId) ?? null, movesBalance: movesBalance(asOf.get(cur.accountId), cur.date) }, -1);
+        effects.transaction({ accountId: t.accountId, cents: toCents(Number(t.amount)), goal: goals.get(t.sectionId) ?? null, movesBalance: movesBalance(asOf.get(t.accountId), new Date(t.date)) }, 1);
         restores.push(
           this.prisma.transaction.update({
             where: { id: t.id },
@@ -460,6 +497,12 @@ export class RecordsService {
     if (auth.accountIds.length > 0 && !auth.accountIds.includes(accountId)) {
       throw new ForbiddenException('This token is not allowed to use that account');
     }
+  }
+
+  /** Per account, the day its balance was last stated (entries before it never move the balance). */
+  private async asOfMap(userId: string): Promise<Map<string, Date | null>> {
+    const accounts = await this.prisma.account.findMany({ where: { userId }, select: { id: true, balanceAsOf: true } });
+    return new Map(accounts.map((a) => [a.id, a.balanceAsOf]));
   }
 
   private async accountNames(userId: string) {
