@@ -2,7 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthContext, AuthedRequest } from './auth-context.js';
 
-type Kind = 'account' | 'plan' | 'section' | 'listing' | 'income' | 'goal' | 'transaction' | 'transfer';
+type Kind = 'account' | 'plan' | 'section' | 'listing' | 'income' | 'goal' | 'transaction' | 'transfer' | 'batch';
 
 /** Request fields that carry the id of something a user owns. */
 const ID_FIELDS: Record<string, Kind> = {
@@ -18,6 +18,7 @@ const ID_FIELDS: Record<string, Kind> = {
   goalId: 'goal',
   transactionId: 'transaction',
   transferId: 'transfer',
+  batchId: 'batch',
 };
 
 /**
@@ -95,6 +96,8 @@ export class OwnershipService {
         return (await p.transaction.findUnique({ where: { id }, select: { userId: true } }))?.userId;
       case 'transfer':
         return (await p.transfer.findUnique({ where: { id }, select: { userId: true } }))?.userId;
+      case 'batch':
+        return (await p.batch.findUnique({ where: { id }, select: { userId: true } }))?.userId;
     }
   }
 }

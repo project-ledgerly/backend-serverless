@@ -4,7 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { API_SCOPES, API_TOKEN_PREFIX, type AuthContext, type AuthedRequest } from './auth-context.js';
-import { IS_PUBLIC } from './auth.decorators.js';
+import { IS_PUBLIC, REQUIRED_SCOPES } from './auth.decorators.js';
 import { OwnershipService } from './ownership.service.js';
 
 const TOUCH_AFTER_MS = 60_000;
@@ -45,6 +45,16 @@ export class AuthGuard implements CanActivate {
 
     const auth = token.startsWith(API_TOKEN_PREFIX) ? await this.fromApiToken(token, req) : await this.fromJwt(token);
     req.auth = auth;
+
+    const required = this.reflector.getAllAndOverride<string[] | undefined>(REQUIRED_SCOPES, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    const missing = required?.filter((scope) => !auth.scopes.includes(scope));
+    if (missing && missing.length > 0) {
+      throw new ForbiddenException(`This token is missing the ${missing.join(', ')} scope`);
+    }
+
     await this.ownership.assertOwned(req, auth);
     return true;
   }
