@@ -370,7 +370,13 @@ model Batch {
   transactionCount Int           @default(0)
   transferCount    Int           @default(0)
   createdAt        DateTime      @default(now())
-  // Set when the import was undone; the rows it created are deleted then.
+  // import | delete | update | reconcile. What the batch did.
+  kind             String        @default("import")
+  // What undo needs to put things back: the rows as they were before a delete
+  // or an edit, or the balance change of a reconcile. Null for an import,
+  // which is undone by deleting the rows that point back at it.
+  undoData         Json?
+  // Set when the batch was undone.
   undoneAt         DateTime?
   transactions     Transaction[]
   transfers        Transfer[]

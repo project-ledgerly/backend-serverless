@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthContext } from '../auth/auth-context.js';
 import { describeErrors, fromCents, planBatch, toCents } from './batch.planner.js';
+import { RecordsService } from './records.service.js';
 import type { LogBatchDto } from './dto/log-batch.dto.js';
 
 /** Most rows one token may log in 24 hours, so a looping AI can't flood the data. */
@@ -13,7 +14,10 @@ const num = (d: { toString(): string }) => Number(d.toString());
 
 @Injectable()
 export class BatchService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly records: RecordsService,
+  ) {}
 
   async log(auth: AuthContext, dto: LogBatchDto) {
     const userId = auth.userId;
@@ -47,7 +51,7 @@ export class BatchService {
       times.length
         ? this.prisma.transaction.findMany({
             where: { userId, date: { gte: from, lte: to } },
-            select: { accountId: true, date: true, amount: true, description: true },
+            select: { id: true, accountId: true, date: true, amount: true, description: true, source: true },
           })
         : [],
       times.length
@@ -65,6 +69,8 @@ export class BatchService {
       sections,
       listings,
       existingTransactions: existingTx.map((t) => ({
+        id: t.id,
+        source: t.source,
         accountId: t.accountId,
         date: t.date,
         cents: toCents(num(t.amount)),
@@ -90,6 +96,9 @@ export class BatchService {
       batchId: null as string | null,
       created: { transactions: plan.transactions.length, transfers: plan.transfers.length },
       skipped: plan.skipped,
+      // Likely the user's own entries of the same purchases: see the instructions on what to do.
+      possibleDuplicates: plan.possibleDuplicates,
+      warnings: plan.warnings,
       balanceChanges,
     };
 
@@ -167,6 +176,7 @@ export class BatchService {
     });
     return batches.map((b) => ({
       id: b.id,
+      kind: b.kind,
       summary: b.summary,
       createdAt: b.createdAt,
       transactions: b.transactionCount,
@@ -185,6 +195,7 @@ export class BatchService {
     const batch = await this.prisma.batch.findFirst({ where: { id: batchId, userId } });
     if (!batch) throw new NotFoundException('Batch not found');
     if (batch.undoneAt) return { batchId, alreadyUndone: true, removed: { transactions: 0, transfers: 0 } };
+    if (batch.kind !== 'import') return this.records.undo(batch);
 
     const [transactions, transfers] = await Promise.all([
       this.prisma.transaction.findMany({

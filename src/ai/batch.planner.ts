@@ -13,7 +13,7 @@ export interface PlannerContext {
   sections: Array<{ id: string; name: string; goal: { id: string; mode: string } | null }>;
   listings: Array<{ id: string; name: string; sectionId: string }>;
   /** Transactions already in the database around the rows' dates, any source. */
-  existingTransactions: Array<{ accountId: string; date: Date; cents: number; description: string }>;
+  existingTransactions: Array<{ id?: string; accountId: string; date: Date; cents: number; description: string; source?: string }>;
   existingTransfers: Array<{ fromAccountId: string; toAccountId: string; date: Date; cents: number }>;
 }
 
@@ -45,8 +45,17 @@ export interface Skipped {
   description: string;
 }
 
+/** A new row that looks like something already there, but not exactly. */
+export interface PossibleDuplicate {
+  row: number;
+  description: string;
+  existing: { id: string; date: string; description: string; source: string };
+}
+
 export interface BatchPlan {
   errors: string[];
+  warnings: string[];
+  possibleDuplicates: PossibleDuplicate[];
   transactions: PlannedTransaction[];
   transfers: PlannedTransfer[];
   skipped: Skipped[];
@@ -59,6 +68,7 @@ export interface BatchPlan {
 const MAX_FUTURE_DAYS = 31;
 const MIN_YEAR = 2000;
 const MAX_ERRORS_SHOWN = 20;
+const NEAR_DAYS = 3;
 
 export const toCents = (amount: number) => Math.round(amount * 100);
 export const fromCents = (cents: number) => (cents / 100).toFixed(2);
@@ -69,6 +79,8 @@ const norm = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ');
 export function planBatch(rows: BatchRowDto[], ctx: PlannerContext): BatchPlan {
   const plan: BatchPlan = {
     errors: [],
+    warnings: [],
+    possibleDuplicates: [],
     transactions: [],
     transfers: [],
     skipped: [],
@@ -199,6 +211,30 @@ export function planBatch(rows: BatchRowDto[], ctx: PlannerContext): BatchPlan {
     // A reserve goal watches an account balance and has no running total.
     if (section.goal && section.goal.mode !== 'RESERVE') {
       plan.goalDeltas.set(section.goal.id, (plan.goalDeltas.get(section.goal.id) ?? 0) + cents);
+      if (cents < 0) {
+        plan.warnings.push(
+          `rows[${index}]: "${section.name}" is a goal section, so this ${fromCents(-cents)} purchase lowers that goal's saved amount. File it under a spending section unless the user meant to spend from the goal.`,
+        );
+      }
+    }
+
+    // The same amount on the same account within a few days of something that
+    // is already there, but described differently or dated a day apart: most
+    // likely the user's own entry of this purchase.
+    const near = ctx.existingTransactions.find(
+      (e) =>
+        e.id !== undefined &&
+        e.accountId === row.accountId &&
+        e.cents === cents &&
+        Math.abs(e.date.getTime() - date.getTime()) <= NEAR_DAYS * 86_400_000 &&
+        !plan.possibleDuplicates.some((p) => p.existing.id === e.id),
+    );
+    if (near) {
+      plan.possibleDuplicates.push({
+        row: index,
+        description,
+        existing: { id: near.id!, date: day(near.date), description: near.description, source: near.source ?? 'manual' },
+      });
     }
   });
 

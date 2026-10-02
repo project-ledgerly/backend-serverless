@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthContext } from '../auth/auth-context.js';
@@ -6,6 +6,14 @@ import { CurrentAuth, RequireScopes } from '../auth/auth.decorators.js';
 import { AccountLinkService } from './account-link.service.js';
 import { BatchService } from './batch.service.js';
 import { LinkAccountDto } from './dto/link-account.dto.js';
+import {
+  DeleteRecordsDto,
+  ListTransactionsQuery,
+  ListTransfersQuery,
+  ReconcileDto,
+  UpdateTransactionsDto,
+} from './dto/records.dto.js';
+import { RecordsService } from './records.service.js';
 import { LogBatchDto } from './dto/log-batch.dto.js';
 import { SnapshotService } from './snapshot.service.js';
 
@@ -20,6 +28,7 @@ export class AiController {
     private readonly snapshots: SnapshotService,
     private readonly batches: BatchService,
     private readonly accountLinks: AccountLinkService,
+    private readonly records: RecordsService,
   ) {}
 
   /** Who the token belongs to and what it may do. The MCP calls this first. */
@@ -80,5 +89,49 @@ export class AiController {
   @RequireScopes('accounts:write')
   linkAccount(@CurrentAuth() auth: AuthContext, @Param('accountId') accountId: string, @Body() dto: LinkAccountDto) {
     return this.accountLinks.link(auth.userId, accountId, dto.identifier);
+  }
+
+  /** Finds transactions (with their ids) by account, section, dates or text. */
+  @Get('transactions')
+  @RequireScopes('read')
+  listTransactions(@CurrentAuth() auth: AuthContext, @Query() query: ListTransactionsQuery) {
+    return this.records.listTransactions(auth, query);
+  }
+
+  /** Deletes transactions and puts their balances right. Reversible with undo. */
+  @Post('transactions/delete')
+  @HttpCode(HttpStatus.OK)
+  @RequireScopes('transactions:write')
+  deleteTransactions(@CurrentAuth() auth: AuthContext, @Body() dto: DeleteRecordsDto) {
+    return this.records.deleteTransactions(auth, dto);
+  }
+
+  /** Changes section, bill, account, date, amount or text of transactions. Reversible with undo. */
+  @Post('transactions/update')
+  @HttpCode(HttpStatus.OK)
+  @RequireScopes('transactions:write')
+  updateTransactions(@CurrentAuth() auth: AuthContext, @Body() dto: UpdateTransactionsDto) {
+    return this.records.updateTransactions(auth, dto);
+  }
+
+  @Get('transfers')
+  @RequireScopes('read')
+  listTransfers(@CurrentAuth() auth: AuthContext, @Query() query: ListTransfersQuery) {
+    return this.records.listTransfers(auth, query);
+  }
+
+  @Post('transfers/delete')
+  @HttpCode(HttpStatus.OK)
+  @RequireScopes('transactions:write')
+  deleteTransfers(@CurrentAuth() auth: AuthContext, @Body() dto: DeleteRecordsDto) {
+    return this.records.deleteTransfers(auth, dto);
+  }
+
+  /** Sets an account's balance to what the bank says. The transactions stay. Reversible with undo. */
+  @Post('accounts/:accountId/reconcile')
+  @HttpCode(HttpStatus.OK)
+  @RequireScopes('accounts:write')
+  reconcile(@CurrentAuth() auth: AuthContext, @Param('accountId') accountId: string, @Body() dto: ReconcileDto) {
+    return this.records.reconcile(auth, accountId, dto);
   }
 }
