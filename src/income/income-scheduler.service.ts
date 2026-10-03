@@ -1,3 +1,4 @@
+import { movesBalance } from '../accounts/balance-rule.js';
 import { Injectable } from '@nestjs/common';
 import type { IncomeFrequency } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -40,12 +41,20 @@ export class IncomeSchedulerService {
       }
       if (dueDates.length === 0) continue;
 
-      const totalCredited = income.amount.times(dueDates.length);
+      // Paydays before the account's stated balance date are already in that
+      // balance: they get a receipt for the history but credit nothing.
+      const account = await this.prisma.account.findUniqueOrThrow({ where: { id: income.accountId } });
+      const credited = dueDates.filter((d) => movesBalance(account.balanceAsOf, d));
+      const totalCredited = income.amount.times(credited.length);
       await this.prisma.$transaction([
-        this.prisma.account.update({
-          where: { id: income.accountId },
-          data: { balance: { increment: totalCredited } },
-        }),
+        ...(credited.length > 0
+          ? [
+              this.prisma.account.update({
+                where: { id: income.accountId },
+                data: { balance: { increment: totalCredited } },
+              }),
+            ]
+          : []),
         this.prisma.income.update({
           where: { id: income.id },
           data: { nextRunDate: cursor },

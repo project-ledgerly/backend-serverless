@@ -23,15 +23,19 @@ export class Effects {
   }
 
   /** sign +1 = the transaction now exists, -1 = it no longer does. */
-  transaction(row: { accountId: string; cents: number; goal: GoalRef | null }, sign: 1 | -1) {
-    this.bump(this.accounts, row.accountId, sign * row.cents);
+  transaction(row: { accountId: string; cents: number; goal: GoalRef | null; movesBalance?: boolean }, sign: 1 | -1) {
+    // movesBalance false: dated before the account's stated balance, so already inside it.
+    if (row.movesBalance !== false) this.bump(this.accounts, row.accountId, sign * row.cents);
     // A reserve goal watches an account balance and has no running total.
     if (row.goal && row.goal.mode !== 'RESERVE') this.bump(this.goals, row.goal.id, sign * row.cents);
   }
 
-  transfer(row: { fromAccountId: string; toAccountId: string; cents: number; goalId: string | null }, sign: 1 | -1) {
-    this.bump(this.accounts, row.fromAccountId, -sign * row.cents);
-    this.bump(this.accounts, row.toAccountId, sign * row.cents);
+  transfer(
+    row: { fromAccountId: string; toAccountId: string; cents: number; goalId: string | null; movesFrom?: boolean; movesTo?: boolean },
+    sign: 1 | -1,
+  ) {
+    if (row.movesFrom !== false) this.bump(this.accounts, row.fromAccountId, -sign * row.cents);
+    if (row.movesTo !== false) this.bump(this.accounts, row.toAccountId, sign * row.cents);
     if (row.goalId) this.bump(this.goals, row.goalId, sign * row.cents);
   }
 

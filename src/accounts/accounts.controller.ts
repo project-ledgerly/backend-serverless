@@ -3,6 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { AccountsService } from './accounts.service.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
 import { CreateTransferDto } from './dto/create-transfer.dto.js';
+import { SetBalanceDto } from './dto/set-balance.dto.js';
 import { UpdateAccountDto } from './dto/update-account.dto.js';
 
 @ApiTags('accounts')
@@ -46,6 +47,13 @@ export class AccountsController {
   @Post(':accountId/reset')
   reset(@Param('accountId') accountId: string) {
     return this.accountsService.reset(accountId);
+  }
+
+  // "This is what the account holds today": sets the balance and the day it is true for.
+  @Post(':accountId/balance')
+  @HttpCode(HttpStatus.OK)
+  setBalance(@Param('accountId') accountId: string, @Body() dto: SetBalanceDto) {
+    return this.accountsService.setBalance(accountId, dto);
   }
 
   @Get(':accountId')

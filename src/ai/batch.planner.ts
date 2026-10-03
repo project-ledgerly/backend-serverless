@@ -2,12 +2,14 @@
 // what logging it would do. Pure (no Prisma, no Nest) so the rules are easy to
 // test; BatchService loads the data, calls this, and writes the result.
 
+import { movesBalance } from '../accounts/balance-rule.js';
 import { randomUUID } from 'node:crypto';
 import type { BatchRowDto } from './dto/log-batch.dto.js';
 
 export interface PlannerContext {
   now: Date;
-  accounts: Array<{ id: string; name: string }>;
+  /** balanceAsOf: entries dated before it are already in the balance and must not move it. */
+  accounts: Array<{ id: string; name: string; balanceAsOf?: Date | null }>;
   /** Empty = no limit. A token limited to some accounts may only use those. */
   allowedAccountIds: readonly string[];
   sections: Array<{ id: string; name: string; goal: { id: string; mode: string } | null }>;
@@ -89,6 +91,7 @@ export function planBatch(rows: BatchRowDto[], ctx: PlannerContext): BatchPlan {
   };
 
   const accounts = new Map(ctx.accounts.map((a) => [a.id, a]));
+  const asOfOf = (accountId: string) => accounts.get(accountId)?.balanceAsOf ?? null;
   const sections = new Map(ctx.sections.map((s) => [s.id, s]));
   const listings = new Map(ctx.listings.map((l) => [l.id, l]));
   const limited = ctx.allowedAccountIds.length > 0;
@@ -165,8 +168,8 @@ export function planBatch(rows: BatchRowDto[], ctx: PlannerContext): BatchPlan {
         goalSectionId: row.goalSectionId ?? null,
         date,
       });
-      plan.accountDeltas.set(row.accountId, (plan.accountDeltas.get(row.accountId) ?? 0) - cents);
-      plan.accountDeltas.set(row.toAccountId, (plan.accountDeltas.get(row.toAccountId) ?? 0) + cents);
+      if (movesBalance(asOfOf(row.accountId), date)) plan.accountDeltas.set(row.accountId, (plan.accountDeltas.get(row.accountId) ?? 0) - cents);
+      if (movesBalance(asOfOf(row.toAccountId), date)) plan.accountDeltas.set(row.toAccountId, (plan.accountDeltas.get(row.toAccountId) ?? 0) + cents);
       if (goalId) plan.goalDeltas.set(goalId, (plan.goalDeltas.get(goalId) ?? 0) + cents);
       return;
     }
@@ -207,7 +210,7 @@ export function planBatch(rows: BatchRowDto[], ctx: PlannerContext): BatchPlan {
       raw: row.raw?.trim() || null,
       date,
     });
-    plan.accountDeltas.set(row.accountId, (plan.accountDeltas.get(row.accountId) ?? 0) + cents);
+    if (movesBalance(asOfOf(row.accountId), date)) plan.accountDeltas.set(row.accountId, (plan.accountDeltas.get(row.accountId) ?? 0) + cents);
     // A reserve goal watches an account balance and has no running total.
     if (section.goal && section.goal.mode !== 'RESERVE') {
       plan.goalDeltas.set(section.goal.id, (plan.goalDeltas.get(section.goal.id) ?? 0) + cents);
