@@ -1,3 +1,4 @@
+import { movesBalance } from '../accounts/balance-rule.js';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { CreateIncomeDto } from './dto/create-income.dto.js';
@@ -26,7 +27,10 @@ export class IncomeService {
         const income = await tx.income.create({
           data: { userId: dto.userId, amount: dto.amount, source: dto.source, date, recurring, accountId: dto.accountId },
         });
-        await tx.account.update({ where: { id: dto.accountId }, data: { balance: { increment: dto.amount } } });
+        // Money that arrived before the balance was stated is already in it.
+        if (movesBalance(account.balanceAsOf, date)) {
+          await tx.account.update({ where: { id: dto.accountId }, data: { balance: { increment: dto.amount } } });
+        }
         await tx.incomeReceipt.create({
           data: { incomeId: income.id, accountId: dto.accountId, amount: dto.amount, date },
         });

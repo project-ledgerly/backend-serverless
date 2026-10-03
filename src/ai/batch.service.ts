@@ -1,3 +1,4 @@
+import { movesBalance } from '../accounts/balance-rule.js';
 import { BadRequestException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -46,7 +47,7 @@ export class BatchService {
     const to = new Date(Math.max(...times) + 2 * DAY_MS);
 
     const [accounts, sections, listings, existingTx, existingTr] = await Promise.all([
-      this.prisma.account.findMany({ where: { userId }, select: { id: true, name: true } }),
+      this.prisma.account.findMany({ where: { userId }, select: { id: true, name: true, balanceAsOf: true } }),
       this.prisma.section.findMany({
         where: { plan: { userId } },
         select: { id: true, name: true, goal: { select: { id: true, mode: true } } },
@@ -206,10 +207,14 @@ export class BatchService {
     const [transactions, transfers] = await Promise.all([
       this.prisma.transaction.findMany({
         where: { batchId },
-        select: { accountId: true, amount: true, section: { select: { goal: { select: { id: true, mode: true } } } } },
+        select: { accountId: true, amount: true, date: true, section: { select: { goal: { select: { id: true, mode: true } } } } },
       }),
       this.prisma.transfer.findMany({ where: { batchId } }),
     ]);
+    // Entries dated before an account's stated balance never moved it, so undoing them must not either.
+    const asOf = new Map(
+      (await this.prisma.account.findMany({ where: { userId }, select: { id: true, balanceAsOf: true } })).map((a) => [a.id, a.balanceAsOf]),
+    );
 
     const accountDeltas = new Map<string, number>();
     const goalDeltas = new Map<string, number>();
@@ -217,7 +222,7 @@ export class BatchService {
 
     for (const t of transactions) {
       const cents = toCents(num(t.amount));
-      add(accountDeltas, t.accountId, -cents);
+      if (movesBalance(asOf.get(t.accountId), t.date)) add(accountDeltas, t.accountId, -cents);
       const goal = t.section.goal;
       if (goal && goal.mode !== 'RESERVE') add(goalDeltas, goal.id, -cents);
     }
@@ -231,8 +236,8 @@ export class BatchService {
     );
     for (const t of transfers) {
       const cents = toCents(num(t.amount));
-      add(accountDeltas, t.fromAccountId, cents);
-      add(accountDeltas, t.toAccountId, -cents);
+      if (movesBalance(asOf.get(t.fromAccountId), t.date)) add(accountDeltas, t.fromAccountId, cents);
+      if (movesBalance(asOf.get(t.toAccountId), t.date)) add(accountDeltas, t.toAccountId, -cents);
       const goalId = t.goalSectionId ? goalBySection.get(t.goalSectionId) : undefined;
       if (goalId) add(goalDeltas, goalId, -cents);
     }

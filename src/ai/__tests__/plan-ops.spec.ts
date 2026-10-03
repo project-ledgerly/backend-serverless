@@ -92,18 +92,18 @@ describe('snapshot: income received', () => {
 
   it('totals this month\'s income apart from refunds, and lists the latest', () => {
     const s = buildSnapshot({ ...base, incomeReceipts: receipts });
-    expect(s.thisMonth.incomeReceived).toBe(80200);
+    expect(s.thisPeriod.incomeReceived).toBe(80200);
     expect(s.recentIncome.map((r) => r.source)).toEqual(['Consulting fee', 'Salary', 'Gift']);
     expect(s.recentIncome[0]).toMatchObject({ account: 'Everyday', date: '2026-10-02', amount: 80000 });
   });
 
   it('only shows a limited token the income of its accounts', () => {
     const s = buildSnapshot({ ...base, incomeReceipts: receipts, allowedAccountIds: ['a2'] });
-    expect(s.thisMonth.incomeReceived).toBe(200);
+    expect(s.thisPeriod.incomeReceived).toBe(200);
     expect(s.recentIncome).toHaveLength(1);
   });
 
   it('is zero when nothing arrived', () => {
-    expect(buildSnapshot(base).thisMonth.incomeReceived).toBe(0);
+    expect(buildSnapshot(base).thisPeriod.incomeReceived).toBe(0);
   });
 });

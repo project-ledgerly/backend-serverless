@@ -1,3 +1,4 @@
+import { payCycleContaining } from '../pay-cycle/pay-cycle.js';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SectionsService } from '../sections/sections.service.js';
@@ -20,17 +21,22 @@ export class SnapshotService {
   async forUser(auth: AuthContext): Promise<Snapshot> {
     const userId = auth.userId;
     const now = new Date();
-    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
-    const [user, accounts, incomes, plan, listings, goals, monthTransactions, recentTransactions, receipts] = await Promise.all([
+    // The budget period follows the salary, so the incomes come first.
+    const incomes = await this.prisma.income.findMany({ where: { userId }, orderBy: { date: 'desc' } });
+    const cycle = payCycleContaining(
+      now,
+      incomes.map((i) => ({ amount: num(i.amount), recurring: i.recurring, frequency: i.frequency, nextRunDate: i.nextRunDate })),
+    );
+
+    const [user, accounts, plan, listings, goals, monthTransactions, recentTransactions, receipts] = await Promise.all([
       this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true, currency: true } }),
       this.prisma.account.findMany({ where: { userId }, orderBy: { name: 'asc' } }),
-      this.prisma.income.findMany({ where: { userId }, orderBy: { date: 'desc' } }),
       this.prisma.plan.findFirst({ where: { userId }, orderBy: { createdAt: 'asc' } }),
       this.prisma.listing.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } }),
       this.prisma.goal.findMany({ where: { section: { plan: { userId } } } }),
       this.prisma.transaction.findMany({
-        where: { userId, date: { gte: monthStart } },
+        where: { userId, date: { gte: cycle.start, lt: cycle.end } },
         orderBy: { date: 'desc' },
         take: MONTH_LIMIT,
       }),
