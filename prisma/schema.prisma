@@ -252,6 +252,10 @@ model Account {
   // How this account is named on a bank statement (the account number, or its
   // last digits). Lets an AI tool tell which account a statement belongs to.
   identifiers String[]    @default([])
+  // The day the balance was last stated as true (set by the user or an AI tool).
+  // Anything dated before it is already in the balance, so it counts toward
+  // spending and history but does not move the balance. Null = every entry moves it.
+  balanceAsOf DateTime?
 
   transactions   Transaction[]
   sections       Section[]

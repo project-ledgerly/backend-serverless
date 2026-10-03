@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import { movesBalance } from '../accounts/balance-rule.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { CreateTransactionDto } from './dto/create-transaction.dto.js';
 import type { UpdateTransactionDto } from './dto/update-transaction.dto.js';
@@ -13,6 +14,18 @@ export class TransactionsService {
     if (!account || account.userId !== userId) {
       throw new BadRequestException(`accountId ${accountId} is not an account of user ${userId}`);
     }
+    return account;
+  }
+
+  /** The account-balance update an entry causes, or nothing when it is dated before the balance was stated. */
+  private balanceOp(account: { id: string; balanceAsOf: Date | null }, date: Date, amount: Prisma.Decimal.Value, sign: 1 | -1) {
+    if (!movesBalance(account.balanceAsOf, date)) return [];
+    return [
+      this.prisma.account.update({
+        where: { id: account.id },
+        data: { balance: sign === 1 ? { increment: amount } : { decrement: amount } },
+      }),
+    ];
   }
 
   private async loadSectionAndCheckProtection(sectionId: string, confirmed: boolean | undefined) {
@@ -56,7 +69,7 @@ export class TransactionsService {
   }
 
   async create(dto: CreateTransactionDto) {
-    await this.assertAccountOwnedByUser(dto.accountId, dto.userId);
+    const account = await this.assertAccountOwnedByUser(dto.accountId, dto.userId);
     const section = await this.loadSectionAndCheckProtection(dto.sectionId, dto.confirmed);
     if (dto.listingId) await this.assertListingFits(dto.listingId, dto.sectionId, dto.userId);
 
@@ -75,10 +88,8 @@ export class TransactionsService {
           listingId: dto.listingId,
         },
       }),
-      this.prisma.account.update({
-        where: { id: dto.accountId },
-        data: { balance: { increment: dto.amount } },
-      }),
+      // Dated before the balance was stated: it is already in that figure.
+      ...this.balanceOp(account, new Date(dto.date), dto.amount, 1),
       ...this.goalDeltaOp(section.goal, dto.amount),
     ]);
     return transaction;
@@ -117,9 +128,11 @@ export class TransactionsService {
     const transaction = await this.findOne(id);
     const oldSection = await this.prisma.section.findUnique({ where: { id: transaction.sectionId }, include: { goal: true } });
 
-    if (dto.accountId !== undefined) {
-      await this.assertAccountOwnedByUser(dto.accountId, transaction.userId);
-    }
+    const oldAccount = await this.prisma.account.findUniqueOrThrow({ where: { id: transaction.accountId } });
+    const newAccount =
+      dto.accountId !== undefined && dto.accountId !== transaction.accountId
+        ? await this.assertAccountOwnedByUser(dto.accountId, transaction.userId)
+        : oldAccount;
     const targetSectionId = dto.sectionId ?? transaction.sectionId;
     let newSection = oldSection;
     if (dto.sectionId !== undefined || dto.confirmed !== undefined) {
@@ -140,18 +153,12 @@ export class TransactionsService {
     // Reverse the old amount off the old account (and old Goal, if any), then
     // apply the new amount to the (possibly different) new account/Goal —
     // simpler and just as correct as netting a delta, even when nothing changed.
-    const newAccountId = dto.accountId ?? transaction.accountId;
     const newAmount = dto.amount ?? transaction.amount.toString();
+    const newDate = 'date' in definedUpdates ? (definedUpdates.date as Date) : transaction.date;
 
     const ops = [
-      this.prisma.account.update({
-        where: { id: transaction.accountId },
-        data: { balance: { decrement: transaction.amount } },
-      }),
-      this.prisma.account.update({
-        where: { id: newAccountId },
-        data: { balance: { increment: newAmount } },
-      }),
+      ...this.balanceOp(oldAccount, transaction.date, transaction.amount, -1),
+      ...this.balanceOp(newAccount, newDate, newAmount, 1),
       ...this.goalDeltaOp(oldSection?.goal, transaction.amount.negated()),
       ...this.goalDeltaOp(newSection?.goal, newAmount),
       this.prisma.transaction.update({ where: { id }, data: definedUpdates }),
@@ -163,11 +170,9 @@ export class TransactionsService {
   async remove(id: string) {
     const transaction = await this.findOne(id);
     const section = await this.prisma.section.findUnique({ where: { id: transaction.sectionId }, include: { goal: true } });
+    const account = await this.prisma.account.findUniqueOrThrow({ where: { id: transaction.accountId } });
     await this.prisma.$transaction([
-      this.prisma.account.update({
-        where: { id: transaction.accountId },
-        data: { balance: { decrement: transaction.amount } },
-      }),
+      ...this.balanceOp(account, transaction.date, transaction.amount, -1),
       ...this.goalDeltaOp(section?.goal, transaction.amount.negated()),
       this.prisma.transaction.delete({ where: { id } }),
     ]);

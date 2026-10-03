@@ -2,8 +2,10 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { Prisma } from '@prisma/client';
 import { Decimal } from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { movesBalance, today } from './balance-rule.js';
 import type { CreateAccountDto } from './dto/create-account.dto.js';
 import type { CreateTransferDto } from './dto/create-transfer.dto.js';
+import type { SetBalanceDto } from './dto/set-balance.dto.js';
 import type { UpdateAccountDto } from './dto/update-account.dto.js';
 
 @Injectable()
@@ -27,11 +29,22 @@ export class AccountsService {
    * is the account's starting balance.
    */
   private async netMovement(accountIds: string[]): Promise<Map<string, Decimal>> {
+    // Only what moved the balance counts: entries dated before an account's
+    // balanceAsOf are already inside the stated figure.
+    const asOf = new Map(
+      (await this.prisma.account.findMany({ where: { id: { in: accountIds } }, select: { id: true, balanceAsOf: true } })).map((a) => [a.id, a.balanceAsOf]),
+    );
+    const counted = (key: 'accountId' | 'fromAccountId' | 'toAccountId') => ({
+      OR: accountIds.map((id) => {
+        const from = asOf.get(id);
+        return { [key]: id, ...(from ? { date: { gte: from } } : {}) };
+      }),
+    });
     const [transactions, receipts, sent, received] = await Promise.all([
-      this.prisma.transaction.groupBy({ by: ['accountId'], where: { accountId: { in: accountIds } }, _sum: { amount: true } }),
-      this.prisma.incomeReceipt.groupBy({ by: ['accountId'], where: { accountId: { in: accountIds } }, _sum: { amount: true } }),
-      this.prisma.transfer.groupBy({ by: ['fromAccountId'], where: { fromAccountId: { in: accountIds } }, _sum: { amount: true } }),
-      this.prisma.transfer.groupBy({ by: ['toAccountId'], where: { toAccountId: { in: accountIds } }, _sum: { amount: true } }),
+      this.prisma.transaction.groupBy({ by: ['accountId'], where: counted('accountId'), _sum: { amount: true } }),
+      this.prisma.incomeReceipt.groupBy({ by: ['accountId'], where: counted('accountId'), _sum: { amount: true } }),
+      this.prisma.transfer.groupBy({ by: ['fromAccountId'], where: counted('fromAccountId'), _sum: { amount: true } }),
+      this.prisma.transfer.groupBy({ by: ['toAccountId'], where: counted('toAccountId'), _sum: { amount: true } }),
     ]);
     const net = new Map<string, Decimal>(accountIds.map((id) => [id, new Decimal(0)]));
     const add = (id: string, amount: Prisma.Decimal | null, sign: 1 | -1) =>
@@ -80,7 +93,18 @@ export class AccountsService {
    */
   async reset(id: string) {
     await this.findOne(id);
-    await this.prisma.account.update({ where: { id }, data: { balance: '0' } });
+    await this.prisma.account.update({ where: { id }, data: { balance: '0', balanceAsOf: today() } });
+    return this.findOne(id);
+  }
+
+  /**
+   * "This is what the account holds today." Sets the balance to that figure and
+   * remembers the day: older entries stay in the history and in spending but are
+   * taken to be inside it, so adding or removing one no longer moves the balance.
+   */
+  async setBalance(id: string, dto: SetBalanceDto) {
+    await this.findOne(id);
+    await this.prisma.account.update({ where: { id }, data: { balance: new Decimal(dto.balance).toFixed(2), balanceAsOf: today() } });
     return this.findOne(id);
   }
 
@@ -111,6 +135,9 @@ export class AccountsService {
       }
       goalId = section.goal.id;
     }
+    const date = new Date(dto.date);
+    const from = accounts.find((a) => a.id === dto.fromAccountId)!;
+    const to = accounts.find((a) => a.id === dto.toAccountId)!;
     const [transfer] = await this.prisma.$transaction([
       this.prisma.transfer.create({
         data: {
@@ -123,8 +150,12 @@ export class AccountsService {
           date: new Date(dto.date),
         },
       }),
-      this.prisma.account.update({ where: { id: dto.fromAccountId }, data: { balance: { decrement: amount.toFixed(2) } } }),
-      this.prisma.account.update({ where: { id: dto.toAccountId }, data: { balance: { increment: amount.toFixed(2) } } }),
+      ...(movesBalance(from.balanceAsOf, date)
+        ? [this.prisma.account.update({ where: { id: dto.fromAccountId }, data: { balance: { decrement: amount.toFixed(2) } } })]
+        : []),
+      ...(movesBalance(to.balanceAsOf, date)
+        ? [this.prisma.account.update({ where: { id: dto.toAccountId }, data: { balance: { increment: amount.toFixed(2) } } })]
+        : []),
       ...(goalId
         ? [this.prisma.goal.update({ where: { id: goalId }, data: { currentAmount: { increment: amount.toFixed(2) } } })]
         : []),
@@ -140,9 +171,17 @@ export class AccountsService {
   async removeTransfer(id: string) {
     const transfer = await this.prisma.transfer.findUnique({ where: { id } });
     if (!transfer) throw new NotFoundException(`Transfer ${id} not found`);
+    const [from, to] = await Promise.all([
+      this.prisma.account.findUniqueOrThrow({ where: { id: transfer.fromAccountId } }),
+      this.prisma.account.findUniqueOrThrow({ where: { id: transfer.toAccountId } }),
+    ]);
     await this.prisma.$transaction([
-      this.prisma.account.update({ where: { id: transfer.fromAccountId }, data: { balance: { increment: transfer.amount } } }),
-      this.prisma.account.update({ where: { id: transfer.toAccountId }, data: { balance: { decrement: transfer.amount } } }),
+      ...(movesBalance(from.balanceAsOf, transfer.date)
+        ? [this.prisma.account.update({ where: { id: transfer.fromAccountId }, data: { balance: { increment: transfer.amount } } })]
+        : []),
+      ...(movesBalance(to.balanceAsOf, transfer.date)
+        ? [this.prisma.account.update({ where: { id: transfer.toAccountId }, data: { balance: { decrement: transfer.amount } } })]
+        : []),
       ...(transfer.goalSectionId
         ? [
             this.prisma.goal.updateMany({
