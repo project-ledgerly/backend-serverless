@@ -2,11 +2,28 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { GoalMode, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { monthlyContribution } from '../engine/sinkingFundCalculator.js';
+import { recentPayCycles } from '../pay-cycle/pay-cycle.js';
 import type { CreateGoalDto } from './dto/create-goal.dto.js';
 import type { UpdateGoalDto } from './dto/update-goal.dto.js';
 
 function startOfMonth(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+/**
+ * Where each point of a goal's trend ends: the last 6 pay periods (payday to the day
+ * before the next), oldest first, so "added this month" means this pay period like the
+ * rest of the app. With no recurring salary these are calendar months.
+ */
+export function goalHistoryEnds(
+  now: Date,
+  incomes: { amount: unknown; recurring: boolean; frequency: string | null; nextRunDate: Date | null }[],
+): Date[] {
+  return recentPayCycles(
+    now,
+    incomes.map((i) => ({ amount: Number(i.amount), recurring: i.recurring, frequency: i.frequency, nextRunDate: i.nextRunDate })),
+    6,
+  ).map((c) => c.end);
 }
 
 @Injectable()
@@ -78,7 +95,7 @@ export class GoalsService {
   /**
    * Every Goal across the user's plans, each with its Section's name (a Goal
    * has no name of its own) and `history`: the goal's running total at the
-   * end of each of the last 6 calendar months (the current month's point is
+   * end of each of the last 6 pay periods (the current period's point is
    * the live currentAmount), derived from the Transactions on its Section —
    * the same ledger currentAmount itself is derived from. Feeds the
    * Dashboard's goal trend lines.
@@ -91,12 +108,8 @@ export class GoalsService {
     });
     if (goals.length === 0) return [];
 
-    const now = new Date();
-    const monthEnds: Date[] = [];
-    for (let monthsAgo = 5; monthsAgo >= 0; monthsAgo--) {
-      // Day 0 of the next month = last instant-ish of this one.
-      monthEnds.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - monthsAgo + 1, 1)));
-    }
+    const incomes = await this.prisma.income.findMany({ where: { userId } });
+    const monthEnds = goalHistoryEnds(new Date(), incomes);
 
     const sectionIds = goals.map((g) => g.sectionId);
     const [spent, paidIn] = await Promise.all([
