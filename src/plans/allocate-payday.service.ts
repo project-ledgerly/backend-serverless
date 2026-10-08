@@ -4,6 +4,8 @@ import { validatePlan } from '../engine/validationService.js';
 import type { AllocationResult, ValidationResult } from '../engine/types.js';
 import { PlanRepository } from './plan.repository.js';
 import { TransactionsService } from '../transactions/transactions.service.js';
+import { billsTotalsForPlan } from '../bills/bills-total.js';
+import { PrismaService } from '../prisma/prisma.service.js';
 
 export type AllocatePaydayResult =
   | { ok: true; result: AllocationResult }
@@ -14,6 +16,7 @@ export class AllocatePaydayService {
   constructor(
     private readonly planRepository: PlanRepository,
     private readonly transactionsService: TransactionsService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -22,7 +25,8 @@ export class AllocatePaydayService {
    */
   async run(planId: string, incomeId: string, incomeAmount: string): Promise<AllocatePaydayResult> {
     const sections = await this.planRepository.loadPlanSections(planId);
-    const result = allocate(sections, incomeAmount);
+    const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: planId } });
+    const result = allocate(sections, incomeAmount, await billsTotalsForPlan(this.prisma, planId, plan.userId));
     const validation = validatePlan(sections, result);
 
     if (!validation.valid) {

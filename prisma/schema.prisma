@@ -50,6 +50,17 @@ enum SectionType {
   SAVINGS
   GOAL
   FLEXIBLE
+  // Money for bills. Its amount is the total of the bills due this pay period, not a
+  // percentage of income; the other sections' percentages are of what is left after it.
+  BILLS
+}
+
+// How often a bill (Listing) comes due.
+enum BillRecurrence {
+  MONTHLY
+  WEEKLY
+  YEARLY
+  ONCE
 }
 
 enum AllocationMode {
@@ -98,17 +109,21 @@ model Section {
 // Scoped by both sectionId and userId (not derived through the Section/Plan
 // chain) so an ownership check is a single indexed lookup, not a join.
 model Listing {
-  id        String   @id @default(uuid())
-  sectionId String
-  section   Section  @relation(fields: [sectionId], references: [id])
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  name      String
-  amount    Decimal
+  id         String         @id @default(uuid())
+  sectionId  String
+  section    Section        @relation(fields: [sectionId], references: [id])
+  userId     String
+  user       User           @relation(fields: [userId], references: [id])
+  name       String
+  amount     Decimal
   // Day of the month (1-31) this bill is due. Null = no fixed due date.
   // Months shorter than the day clamp to their last day.
-  dueDay    Int?
-  createdAt DateTime @default(now())
+  dueDay     Int?
+  recurrence BillRecurrence @default(MONTHLY)
+  // The date a ONCE bill is due, and the anchor for a YEARLY (its month and day) or
+  // WEEKLY (its weekday) bill. Unused for MONTHLY, which follows dueDay.
+  dueDate    DateTime?
+  createdAt  DateTime       @default(now())
 
   // Expenses recorded against this bill. Deleting the bill keeps them (the
   // spend happened), they just lose the link.

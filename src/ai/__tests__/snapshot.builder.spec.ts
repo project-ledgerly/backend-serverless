@@ -156,3 +156,39 @@ describe('buildSnapshot', () => {
     expect(s.plan).toBeNull();
   });
 });
+
+describe('bills, transaction kinds and flexible money', () => {
+  it('says which bills fall due this period and on which days', () => {
+    const s = buildSnapshot(
+      input({
+        sections: [
+          { id: 's-bills', parentId: null, name: 'Bills', type: 'BILLS', allocationMode: 'PERCENTAGE', percentage: 0, accountId: 'a-main', protected: false, projectedAmount: 860 },
+        ],
+        listings: [
+          { id: 'l-rent', sectionId: 's-bills', name: 'Rent', amount: 800, dueDay: 1, recurrence: 'MONTHLY' },
+          { id: 'l-fix', sectionId: 's-bills', name: 'Phone repair', amount: 60, dueDay: null, recurrence: 'ONCE', dueDate: new Date('2026-10-20T00:00:00Z') },
+          { id: 'l-ins', sectionId: 's-bills', name: 'Insurance', amount: 500, dueDay: null, recurrence: 'YEARLY', dueDate: new Date('2024-03-05T00:00:00Z') },
+        ],
+        monthTransactions: [],
+        recentTransactions: [],
+      }),
+    );
+    const bills = s.plan!.sections[0].bills;
+    expect(bills.find((b) => b.name === 'Phone repair')).toMatchObject({ recurrence: 'ONCE', dueThisPeriod: true, dueDates: ['2026-10-20'] });
+    expect(bills.find((b) => b.name === 'Insurance')).toMatchObject({ recurrence: 'YEARLY', dueThisPeriod: false, dueDates: [] });
+    expect(bills.find((b) => b.name === 'Rent')).toMatchObject({ recurrence: 'MONTHLY', dueThisPeriod: true });
+  });
+
+  it('gives each transaction a kind from its section', () => {
+    const s = buildSnapshot(input());
+    const kinds = Object.fromEntries(s.recentTransactions.map((t) => [t.id, t.kind]));
+    expect(kinds.t2).toBe('FLEXIBLE_SPENDING');
+    const rent = buildSnapshot(input({ recentTransactions: [{ id: 'r', date: NOW, amount: -800, description: 'Rent', accountId: 'a-main', sectionId: 's-ess', listingId: 'l-rent' }] }));
+    expect(rent.recentTransactions[0].kind).toBe('BILL_PAYMENT');
+  });
+
+  it('reports the salary account balance as the flexible money', () => {
+    const s = buildSnapshot(input());
+    expect(s.flexible).toEqual({ accountId: 'a-main', accountName: 'Everyday', balance: 1200 });
+  });
+});

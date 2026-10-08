@@ -99,6 +99,8 @@ export class SnapshotService {
         name: l.name,
         amount: num(l.amount),
         dueDay: l.dueDay,
+        recurrence: l.recurrence,
+        dueDate: l.dueDate,
       })),
       goals: goals.map((g) => ({
         id: g.id,

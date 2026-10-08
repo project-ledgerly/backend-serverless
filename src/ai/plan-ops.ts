@@ -2,12 +2,14 @@
 // values with messages that say exactly what is wrong. Plain code, no Nest or
 // Prisma, so the parsing rules are easy to test.
 
-export type SectionType = 'ESSENTIAL' | 'FLEXIBLE' | 'SAVINGS' | 'GOAL';
+export type SectionType = 'ESSENTIAL' | 'FLEXIBLE' | 'SAVINGS' | 'GOAL' | 'BILLS';
+export type BillRecurrence = 'MONTHLY' | 'WEEKLY' | 'YEARLY' | 'ONCE';
 export type AccountType = 'SPENDING' | 'SAVINGS';
 export type GoalMode = 'TARGET' | 'MONTHLY_RECURRING' | 'RESERVE';
 export type Frequency = 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'YEARLY';
 
-const SECTION_TYPES: SectionType[] = ['ESSENTIAL', 'FLEXIBLE', 'SAVINGS', 'GOAL'];
+const SECTION_TYPES: SectionType[] = ['ESSENTIAL', 'FLEXIBLE', 'SAVINGS', 'GOAL', 'BILLS'];
+const RECURRENCES: BillRecurrence[] = ['MONTHLY', 'WEEKLY', 'YEARLY', 'ONCE'];
 const ACCOUNT_TYPES: AccountType[] = ['SPENDING', 'SAVINGS'];
 const GOAL_MODES: GoalMode[] = ['TARGET', 'MONTHLY_RECURRING', 'RESERVE'];
 const FREQUENCIES: Frequency[] = ['WEEKLY', 'BIWEEKLY', 'MONTHLY', 'YEARLY'];
@@ -44,8 +46,26 @@ export type PlanOp =
     }
   | { op: 'remove_section'; section: Ref }
   | { op: 'reorder_sections'; sections: Ref[] }
-  | { op: 'add_bill'; ref?: string; section: Ref; name: string; amount: number; dueDay?: number }
-  | { op: 'update_bill'; bill: Ref; name?: string; amount?: number; dueDay?: number | null }
+  | {
+      op: 'add_bill';
+      ref?: string;
+      section: Ref;
+      name: string;
+      amount: number;
+      dueDay?: number;
+      recurrence?: BillRecurrence;
+      dueDate?: string;
+    }
+  | {
+      op: 'update_bill';
+      bill: Ref;
+      name?: string;
+      amount?: number;
+      dueDay?: number | null;
+      recurrence?: BillRecurrence;
+      dueDate?: string | null;
+      section?: Ref;
+    }
   | { op: 'remove_bill'; bill: Ref }
   | {
       op: 'add_goal';
@@ -248,7 +268,12 @@ export function parseOp(raw: Raw): PlanOp {
       return { op, section: r.ref('section', { required: true })! };
     case 'reorder_sections':
       return { op, sections: r.refs('sections') };
-    case 'add_bill':
+    case 'add_bill': {
+      const recurrence = r.oneOf('recurrence', RECURRENCES);
+      const dueDate = r.date('dueDate');
+      if ((recurrence === 'ONCE' || recurrence === 'YEARLY' || recurrence === 'WEEKLY') && !dueDate) {
+        throw new Error(`dueDate is required for a ${recurrence} bill`);
+      }
       return {
         op,
         ref: r.name('ref'),
@@ -256,10 +281,23 @@ export function parseOp(raw: Raw): PlanOp {
         name: r.string('name', { required: true, max: 80 })!,
         amount: r.number('amount', { required: true, min: 0.01 })!,
         dueDay: r.number('dueDay', { min: 1, max: 31 }),
+        recurrence,
+        dueDate,
       };
+    }
     case 'update_bill': {
       const dueDay = raw.dueDay === null ? null : r.number('dueDay', { min: 1, max: 31 });
-      return { op, bill: r.ref('bill', { required: true })!, name: r.string('name', { max: 80 }), amount: r.number('amount', { min: 0.01 }), dueDay };
+      const dueDate = raw.dueDate === null ? null : r.date('dueDate');
+      return {
+        op,
+        bill: r.ref('bill', { required: true })!,
+        name: r.string('name', { max: 80 }),
+        amount: r.number('amount', { min: 0.01 }),
+        dueDay,
+        recurrence: r.oneOf('recurrence', RECURRENCES),
+        dueDate,
+        section: r.ref('section'),
+      };
     }
     case 'remove_bill':
       return { op, bill: r.ref('bill', { required: true })! };

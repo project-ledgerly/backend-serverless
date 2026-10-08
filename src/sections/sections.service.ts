@@ -4,6 +4,7 @@ import { Decimal } from 'decimal.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { validateSiblingGroup } from '../engine/validationService.js';
 import type { SectionInput } from '../engine/types.js';
+import { billsTotalsForPlan } from '../bills/bills-total.js';
 import type { CreateSectionDto } from './dto/create-section.dto.js';
 import type { UpdateSectionDto } from './dto/update-section.dto.js';
 import type { ReorderSectionsDto } from './dto/reorder-sections.dto.js';
@@ -80,8 +81,11 @@ export class SectionsService {
    * after its PERCENTAGE siblings instead of its own (placeholder) percentage.
    * A single section can't be decorated in isolation — a REMAINDER
    * section's amount only means anything next to its siblings.
+   *
+   * A BILLS section is not a percentage: it gets the total of its bills due this
+   * pay period (`billsTotals`), and its siblings' percentages are of what is left.
    */
-  private computeProjectedAmounts(sections: Section[], incomeTotal: Decimal): Map<string, string> {
+  private computeProjectedAmounts(sections: Section[], incomeTotal: Decimal, billsTotals: Map<string, Decimal> = new Map()): Map<string, string> {
     const byParent = new Map<string | null, Section[]>();
     for (const s of sections) {
       const key = s.parentId;
@@ -97,19 +101,30 @@ export class SectionsService {
       let remainderSection: Section | undefined;
       let percentageSum = new Decimal(0);
 
+      let billsSum = new Decimal(0);
       for (const s of siblings) {
+        if (s.type !== 'BILLS') continue;
+        const amount = billsTotals.get(s.id) ?? new Decimal(0);
+        amounts.set(s.id, amount.toFixed(2));
+        billsSum = billsSum.plus(amount);
+        resolveGroup(s.id, amount);
+      }
+      const base = parentAmount.minus(billsSum);
+
+      for (const s of siblings) {
+        if (s.type === 'BILLS') continue;
         if (s.allocationMode === 'REMAINDER') {
           remainderSection = s;
           continue;
         }
-        const amount = parentAmount.times(s.percentage.toString()).dividedBy(100);
+        const amount = base.times(s.percentage.toString()).dividedBy(100);
         amounts.set(s.id, amount.toFixed(2));
         percentageSum = percentageSum.plus(amount);
         resolveGroup(s.id, amount);
       }
 
       if (remainderSection) {
-        const amount = parentAmount.minus(percentageSum);
+        const amount = base.minus(percentageSum);
         amounts.set(remainderSection.id, amount.toFixed(2));
         resolveGroup(remainderSection.id, amount);
       }
@@ -154,11 +169,12 @@ export class SectionsService {
   /** Fetches every Section of a plan with projectedAmount computed together. */
   private async decoratePlanSections(planId: string) {
     const plan = await this.prisma.plan.findUniqueOrThrow({ where: { id: planId } });
-    const [sections, incomeTotal] = await Promise.all([
+    const [sections, incomeTotal, billsTotals] = await Promise.all([
       this.prisma.section.findMany({ where: { planId }, orderBy: { priorityOrder: 'asc' } }),
       this.recurringIncomeTotal(plan.userId),
+      billsTotalsForPlan(this.prisma, planId, plan.userId),
     ]);
-    const amounts = this.computeProjectedAmounts(sections, incomeTotal);
+    const amounts = this.computeProjectedAmounts(sections, incomeTotal, billsTotals);
     return this.withProjectedAmounts(sections, amounts);
   }
 

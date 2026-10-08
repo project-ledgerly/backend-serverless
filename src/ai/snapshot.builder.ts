@@ -2,6 +2,8 @@
 // so the pay-period maths and the account limit are easy to test.
 
 import { payCycleContaining } from '../pay-cycle/pay-cycle.js';
+import { dueDatesInPeriod, type BillRecurrence } from '../bills/bill-schedule.js';
+import { transactionKind } from '../transactions/transaction-kind.js';
 
 export interface SnapshotInput {
   now: Date;
@@ -29,7 +31,15 @@ export interface SnapshotInput {
     /** What this section gets per payday, from the plan's recurring income. */
     projectedAmount: number;
   }>;
-  listings: Array<{ id: string; sectionId: string; name: string; amount: number; dueDay: number | null }>;
+  listings: Array<{
+    id: string;
+    sectionId: string;
+    name: string;
+    amount: number;
+    dueDay: number | null;
+    recurrence?: BillRecurrence;
+    dueDate?: Date | null;
+  }>;
   goals: Array<{
     id: string;
     sectionId: string;
@@ -86,6 +96,7 @@ export function buildSnapshot(input: SnapshotInput) {
   const incomeThisPeriod = receipts.filter((r) => r.date >= cycle.start && r.date < cycle.end).reduce((sum, r) => sum + r.amount, 0);
 
   const sectionName = new Map(input.sections.map((s) => [s.id, s.name]));
+  const sectionType = new Map(input.sections.map((s) => [s.id, s.type]));
   const listingName = new Map(input.listings.map((l) => [l.id, l.name]));
   const accountName = new Map(input.accounts.map((a) => [a.id, a.name]));
 
@@ -105,6 +116,13 @@ export function buildSnapshot(input: SnapshotInput) {
   }
 
   const balanceOf = new Map(input.accounts.map((a) => [a.id, a.balance]));
+
+  // Flexible money is not a section: it is what is left in the account the salary lands in, after
+  // the spending and savings accounts have been topped up on payday.
+  const salary = input.incomes
+    .filter((i) => i.recurring && allowed(i.accountId))
+    .sort((a, b) => b.amount - a.amount)[0];
+  const flexibleAccount = salary ? input.accounts.find((a) => a.id === salary.accountId) : undefined;
   const sections = input.sections.map((s) => {
     const spentThisPeriod = spentBySection.get(s.id) ?? 0;
     const goal = input.goals.find((g) => g.sectionId === s.id);
@@ -133,11 +151,22 @@ export function buildSnapshot(input: SnapshotInput) {
                 (t.listingId === l.id || (t.listingId === null && t.sectionId === l.sectionId && namesBill(t.description, l.name))),
             )
             .reduce((sum, t) => sum - t.amount, 0);
+          const recurrence = l.recurrence ?? 'MONTHLY';
+          const dates = dueDatesInPeriod(
+            { recurrence, dueDay: l.dueDay, dueDate: l.dueDate ?? null },
+            { start: cycle.start, end: cycle.end },
+          );
           return {
             id: l.id,
             name: l.name,
             amount: round(l.amount),
             dueDay: l.dueDay,
+            recurrence,
+            // ONCE: the due date. YEARLY: its month and day. WEEKLY: its weekday.
+            dueDate: l.dueDate ? l.dueDate.toISOString().slice(0, 10) : null,
+            // Whether the bill falls due in this pay period, and on which days.
+            dueThisPeriod: dates.length > 0,
+            dueDates: dates.filter((d): d is Date => d !== null).map((d) => d.toISOString().slice(0, 10)),
             paidThisPeriod: paid > 0,
             paidAmount: round(paid),
           };
@@ -188,6 +217,10 @@ export function buildSnapshot(input: SnapshotInput) {
         accountId: i.accountId,
       })),
     plan: input.plan ? { id: input.plan.id, name: input.plan.name, sections } : null,
+    // What is left in the salary account: the flexible money, with no budget of its own.
+    flexible: flexibleAccount
+      ? { accountId: flexibleAccount.id, accountName: flexibleAccount.name, balance: round(flexibleAccount.balance) }
+      : null,
     // The current budget period: from the last payday to the day before the next one.
     // basis is "payday" when it follows a recurring income, "calendar" when there is none.
     thisPeriod: {
@@ -215,6 +248,7 @@ export function buildSnapshot(input: SnapshotInput) {
       merchant: t.merchant ?? null,
       account: accountName.get(t.accountId) ?? null,
       section: sectionName.get(t.sectionId) ?? null,
+      kind: transactionKind(sectionType.get(t.sectionId) ?? 'FLEXIBLE', t.listingId),
       bill: t.listingId ? (listingName.get(t.listingId) ?? null) : null,
     })),
   };

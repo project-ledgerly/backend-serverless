@@ -159,7 +159,16 @@ export class PlanEditService {
       allocation: s.allocationMode === 'REMAINDER' ? 'remainder' : `${s.percentage.toString()}%`,
       perPayday: Number(s.projectedAmount),
       accountId: s.accountId,
-      bills: listings.filter((l) => l.sectionId === s.id).map((l) => ({ id: l.id, name: l.name, amount: Number(l.amount), dueDay: l.dueDay })),
+      bills: listings
+        .filter((l) => l.sectionId === s.id)
+        .map((l) => ({
+          id: l.id,
+          name: l.name,
+          amount: Number(l.amount),
+          dueDay: l.dueDay,
+          recurrence: l.recurrence,
+          dueDate: l.dueDate ? l.dueDate.toISOString().slice(0, 10) : null,
+        })),
       goal: goals.filter((g) => g.sectionId === s.id).map((g) => ({ id: g.id, mode: g.mode, targetAmount: Number(g.targetAmount) }))[0] ?? null,
     }));
   }
@@ -251,16 +260,27 @@ export class PlanEditService {
 
       case 'add_bill': {
         const sectionId = await this.resolve(run, 'section', op.section);
-        const bill = await this.listings.create(sectionId, { userId, name: op.name, amount: String(op.amount), dueDay: op.dueDay });
+        const bill = await this.listings.create(sectionId, {
+          userId,
+          name: op.name,
+          amount: String(op.amount),
+          dueDay: op.dueDay,
+          recurrence: op.recurrence,
+          dueDate: op.dueDate,
+        });
         remember(op.ref, bill.id);
         return;
       }
       case 'update_bill': {
         const id = await this.resolve(run, 'bill', op.bill);
+        const sectionId = op.section ? await this.resolve(run, 'section', op.section) : undefined;
         await this.listings.update(id, {
           ...(op.name !== undefined ? { name: op.name } : {}),
           ...(op.amount !== undefined ? { amount: String(op.amount) } : {}),
           ...(op.dueDay !== undefined ? { dueDay: op.dueDay } : {}),
+          ...(op.recurrence !== undefined ? { recurrence: op.recurrence } : {}),
+          ...(op.dueDate !== undefined ? { dueDate: op.dueDate } : {}),
+          ...(sectionId !== undefined ? { sectionId } : {}),
         });
         return;
       }

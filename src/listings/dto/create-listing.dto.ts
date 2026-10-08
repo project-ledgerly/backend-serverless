@@ -1,4 +1,5 @@
-import { IsInt, IsNotEmpty, IsNumberString, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsNotEmpty, IsNumberString, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { BillRecurrence } from '@prisma/client';
 
 export class CreateListingDto {
   // Whose listing this is — checked against the Section's own Plan owner in
@@ -21,4 +22,14 @@ export class CreateListingDto {
   @Min(1)
   @Max(31)
   dueDay?: number;
+
+  // How often it comes due (default MONTHLY).
+  @IsOptional()
+  @IsEnum(BillRecurrence)
+  recurrence?: BillRecurrence;
+
+  // ONCE: the due date. YEARLY: its month and day. WEEKLY: its weekday.
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string;
 }

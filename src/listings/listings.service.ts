@@ -26,7 +26,15 @@ export class ListingsService {
   async create(sectionId: string, dto: CreateListingDto) {
     await this.assertUserOwnsSection(sectionId, dto.userId);
     return this.prisma.listing.create({
-      data: { sectionId, userId: dto.userId, name: dto.name, amount: dto.amount, dueDay: dto.dueDay ?? null },
+      data: {
+        sectionId,
+        userId: dto.userId,
+        name: dto.name,
+        amount: dto.amount,
+        dueDay: dto.dueDay ?? null,
+        recurrence: dto.recurrence ?? 'MONTHLY',
+        dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+      },
     });
   }
 
@@ -46,8 +54,13 @@ export class ListingsService {
   }
 
   async update(id: string, dto: UpdateListingDto) {
-    await this.findOne(id);
-    return this.prisma.listing.update({ where: { id }, data: dto });
+    const listing = await this.findOne(id);
+    if (dto.sectionId) await this.assertUserOwnsSection(dto.sectionId, listing.userId);
+    const { dueDate, ...rest } = dto;
+    return this.prisma.listing.update({
+      where: { id },
+      data: { ...rest, ...(dueDate === undefined ? {} : { dueDate: dueDate === null ? null : new Date(dueDate) }) },
+    });
   }
 
   async remove(id: string) {

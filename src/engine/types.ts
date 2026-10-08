@@ -1,6 +1,6 @@
 import type { Decimal } from "decimal.js";
 
-export type SectionType = "ESSENTIAL" | "SAVINGS" | "GOAL" | "FLEXIBLE";
+export type SectionType = "ESSENTIAL" | "SAVINGS" | "GOAL" | "FLEXIBLE" | "BILLS";
 export type AllocationMode = "PERCENTAGE" | "REMAINDER";
 
 export interface SectionInput {

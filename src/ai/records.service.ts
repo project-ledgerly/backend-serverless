@@ -1,3 +1,4 @@
+import { transactionKind } from '../transactions/transaction-kind.js';
 import { movesBalance, today } from '../accounts/balance-rule.js';
 import {
   BadRequestException,
@@ -82,7 +83,7 @@ export class RecordsService {
         skip: q.offset ?? 0,
         include: {
           account: { select: { name: true } },
-          section: { select: { name: true } },
+          section: { select: { name: true, type: true } },
           listing: { select: { name: true } },
         },
       }),
@@ -100,6 +101,7 @@ export class RecordsService {
         account: t.account.name,
         sectionId: t.sectionId,
         section: t.section.name,
+        kind: transactionKind(t.section.type, t.listingId),
         listingId: t.listingId,
         bill: t.listing?.name ?? null,
         source: t.source,
