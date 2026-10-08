@@ -1,3 +1,4 @@
+import { Decimal } from "decimal.js";
 import { describe, expect, it } from "vitest";
 import { allocate } from "../allocationEngine.js";
 import type { SectionInput } from "../types.js";
@@ -124,5 +125,36 @@ describe("allocate", () => {
     expect(result.amounts.get("a")!.toString()).toBe("3.36633");
     expect(result.amounts.get("b")!.toString()).toBe("3.36633");
     expect(result.amounts.get("c")!.toString()).toBe("3.36734");
+  });
+});
+
+describe('allocate with a BILLS section', () => {
+  const section = (id: string, type: SectionInput['type'], percentage: number, mode: SectionInput['allocationMode'] = 'PERCENTAGE', priorityOrder = 1): SectionInput => ({
+    id,
+    parentId: null,
+    name: id,
+    type,
+    allocationMode: mode,
+    percentage,
+    priorityOrder,
+    protected: false,
+  });
+
+  it('gives bills their total and splits the rest by percentage', () => {
+    const result = allocate(
+      [section('bills', 'BILLS', 0), section('ess', 'ESSENTIAL', 40, 'PERCENTAGE', 2), section('save', 'SAVINGS', 25, 'PERCENTAGE', 3), section('flex', 'FLEXIBLE', 0, 'REMAINDER', 4)],
+      185000,
+      new Map([['bills', new Decimal(109200)]]),
+    );
+    expect(result.amounts.get('bills')!.toNumber()).toBe(109200);
+    expect(result.amounts.get('ess')!.toNumber()).toBe(30320); // 40% of 75,800
+    expect(result.amounts.get('save')!.toNumber()).toBe(18950); // 25% of 75,800
+    expect(result.amounts.get('flex')!.toNumber()).toBe(26530); // what is left of 75,800
+  });
+
+  it('is unchanged when there is no BILLS section', () => {
+    const result = allocate([section('ess', 'ESSENTIAL', 50), section('flex', 'FLEXIBLE', 0, 'REMAINDER', 2)], 1000);
+    expect(result.amounts.get('ess')!.toNumber()).toBe(500);
+    expect(result.amounts.get('flex')!.toNumber()).toBe(500);
   });
 });

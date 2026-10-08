@@ -18,7 +18,13 @@ function computeAmount(
  * A remainder-mode section resolves last within its sibling group, after
  * every percentage-mode sibling ahead of it is funded.
  */
-export function allocate(sections: SectionInput[], income: Decimal.Value): AllocationResult {
+export function allocate(
+  sections: SectionInput[],
+  income: Decimal.Value,
+  // A BILLS section is the total of its bills due this pay period, not a percentage; the other
+  // sections in its group divide what is left after it.
+  billsTotals: Map<string, Decimal> = new Map(),
+): AllocationResult {
   const amounts = new Map<string, Decimal>();
   const order: string[] = [];
 
@@ -42,10 +48,19 @@ export function allocate(sections: SectionInput[], income: Decimal.Value): Alloc
   }
 
   function fundLevel(parentId: string | null, parentAmount: Decimal) {
-    const siblings = byParent.get(parentId) ?? [];
+    const all = byParent.get(parentId) ?? [];
+    let base = parentAmount;
+    for (const section of all.filter((s) => s.type === "BILLS")) {
+      const amount = billsTotals.get(section.id) ?? new Decimal(0);
+      amounts.set(section.id, amount);
+      order.push(section.id);
+      base = base.minus(amount);
+      fundLevel(section.id, amount);
+    }
+    const siblings = all.filter((s) => s.type !== "BILLS");
     const funded: Decimal[] = [];
     for (const section of siblings) {
-      const amount = computeAmount(section, parentAmount, funded);
+      const amount = computeAmount(section, base, funded);
       amounts.set(section.id, amount);
       order.push(section.id);
       funded.push(amount);
